@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Integração de pagamentos Pix via Mercado Pago Orders API - arquitetura
+  hexagonal (ports & adapters). Contém duas Lambdas:
+    1) CreatePaymentOrderFunction - consumidora da fila sqs-solicitar-pagamento,
+       responsável por criar Orders no Mercado Pago.
+    2) WebhookFunction - recebe as notificações (webhook) do Mercado Pago
+       para o tópico "order" e atualiza o status do pedido.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 15
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        ORDERS_TABLE_NAME: !Ref OrdersTable
+        RETORNO_PAGAMENTO_QUEUE_URL: !Ref RetornoPagamentoQueue
+        MP_API_BASE_URL: https://api.mercadopago.com
+
+Parameters:
+  MercadoPagoAccessToken:
+    Type: String
+    NoEcho: true
+    Description: >
+      Access Token (ex.: APP_USR-...) da sua aplicação no Mercado Pago.
+      Recomenda-se, em produção, buscar este valor do AWS Secrets Manager
+      em vez de passá-lo como parâmetro de deploy em texto plano.
+
+  MercadoPagoWebhookSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      Chave secreta do webhook exibida no painel de Webhooks da aplicação
+      no Mercado Pago. Usada para validar o header 'x-signature'. Se deixado
+      em branco, a validação de assinatura é pulada (não recomendado em
+      produção).
+
+Resources:
+
+  # ---------------------------------------------------------------------
+  # Fila SQS que dispara a criação de orders + Dead Letter Queue
+  # ---------------------------------------------------------------------
+  SolicitarPagamentoDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sqs-solicitar-pagamento-dlq
+      MessageRetentionPeriod: 1209600 # 14 dias
+
+  SolicitarPagamentoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sqs-solicitar-pagamento
+      VisibilityTimeout: 90 # boa prática: >= 6x o timeout da função (15s)
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt SolicitarPagamentoDLQ.Arn
+        maxReceiveCount: 5
+
+  # ---------------------------------------------------------------------
+  # Fila SQS de saída: publicamos aqui o status resumido de cada pagamento
+  # ('solicitado-pix' ao criar a order, 'pago' quando o webhook confirma o
+  # pagamento) para o restante do sistema consumir.
+  # ---------------------------------------------------------------------
+  RetornoPagamentoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sqs-retorno-pagamento
+      MessageRetentionPeriod: 345600 # 4 dias
+
+  # ---------------------------------------------------------------------
+  # Tabela DynamoDB para persistência do estado das orders
+  # ---------------------------------------------------------------------
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: orders
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: order_id
+          KeyType: HASH
+
+  # ---------------------------------------------------------------------
+  # Lambda consumidora da fila SQS - cria a order no Mercado Pago
+  # ---------------------------------------------------------------------
+  CreatePaymentOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: create-payment-order
+      Handler: src.infrastructure.handlers.sqs_handler.lambda_handler
+      CodeUri: .
+      Environment:
+        Variables:
+          MP_ACCESS_TOKEN: !Ref MercadoPagoAccessToken
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt SolicitarPagamentoQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt RetornoPagamentoQueue.QueueName
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SolicitarPagamentoQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  # ---------------------------------------------------------------------
+  # Lambda que recebe o webhook (notificações) do Mercado Pago
+  # ---------------------------------------------------------------------
+  WebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: mercadopago-webhook
+      Handler: src.infrastructure.handlers.webhook_handler.lambda_handler
+      CodeUri: .
+      Environment:
+        Variables:
+          MP_ACCESS_TOKEN: !Ref MercadoPagoAccessToken
+          MP_WEBHOOK_SECRET: !Ref MercadoPagoWebhookSecret
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt RetornoPagamentoQueue.QueueName
+      Events:
+        WebhookApi:
+          Type: Api
+          Properties:
+            Path: /api/webhooks/mercadopago
+            Method: post
+
+Outputs:
+  SolicitarPagamentoQueueUrl:
+    Description: URL da fila SQS que dispara a criação de orders.
+    Value: !Ref SolicitarPagamentoQueue
+
+  SolicitarPagamentoQueueArn:
+    Description: ARN da fila SQS (útil para outros serviços publicarem nela).
+    Value: !GetAtt SolicitarPagamentoQueue.Arn
+
+  RetornoPagamentoQueueUrl:
+    Description: >
+      URL da fila SQS onde são publicados os status resumidos
+      ('solicitado-pix' e 'pago') de cada pagamento.
+    Value: !Ref RetornoPagamentoQueue
+
+  WebhookEndpoint:
+    Description: >
+      URL pública gerada automaticamente pelo API Gateway. Para usar
+      https://kortextecnologia.com.br/api/webhooks/mercadopago como no seu
+      exemplo, configure um Custom Domain Name no API Gateway apontando
+      para este endpoint (veja instruções no README.md).
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/api/webhooks/mercadopago"
+
+  OrdersTableName:
+    Description: Nome da tabela DynamoDB com o estado das orders.
+    Value: !Ref OrdersTable

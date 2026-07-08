@@ -1,0 +1,13 @@
+{
+  "resource": "/api/webhooks/mercadopago",
+  "path": "/api/webhooks/mercadopago",
+  "httpMethod": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "x-signature": "ts=1700000000,v1=coloque_aqui_um_hash_valido_ou_deixe_MP_WEBHOOK_SECRET_vazio",
+    "x-request-id": "req-example-123"
+  },
+  "queryStringParameters": null,
+  "body": "{\"action\": \"order.updated\", \"type\": \"order\", \"data\": {\"id\": \"ORDTST01KWW9Z6D4YVRVAB6VTJWYN33G\"}}",
+  "isBase64Encoded": false
+}
