@@ -83,7 +83,11 @@ src/
 
 - Python 3.12+
 - [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.10
-- Uma conta AWS configurada (`aws configure`)
+- Uma conta AWS configurada (`aws configure`) — só necessária pro deploy
+  real; para testar via LocalStack (veja "Testando contra o LocalStack"),
+  qualquer credencial fake serve
+- Docker — só necessário para a Opção B de teste local (Lambda publicada
+  de verdade no LocalStack, que usa o executor Docker dele)
 - Os recursos do [`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
   já aplicados (filas SQS + tabela DynamoDB) — este repositório só cria a
   Lambda e referencia esses recursos, não os cria
@@ -310,18 +314,25 @@ antes de devolver uma), então o registro usa o `external_reference` como
 
 ## Testando contra o LocalStack
 
-Para testar de ponta a ponta (SQS + DynamoDB + esta Lambda) sem depender de
-uma conta AWS real, use o ambiente local do
+Duas formas de testar de ponta a ponta (SQS + DynamoDB + esta Lambda) sem
+depender de uma conta AWS real, usando o ambiente local do
 [`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
-(LocalStack via Docker):
+(LocalStack via Docker). Em ambas, primeiro suba o LocalStack e crie as
+filas + tabela lá no outro repositório:
 
-1. No repositório `oficina-infra-pagamento`: `docker compose up -d` e
-   depois `terraform -chdir=terraform-local apply` — isso cria as 3 filas
-   e a tabela `orders` no LocalStack. Anote as URLs de saída
-   (`terraform -chdir=terraform-local output`).
-2. Neste repositório, exporte as variáveis de ambiente apontando para o
-   LocalStack (qualquer valor serve para as credenciais — o LocalStack não
-   valida):
+```bash
+# no oficina-infra-pagamento
+docker compose up -d
+terraform -chdir=terraform-local apply
+```
+
+### Opção A — invocar em processo (mais rápido, sem publicar nada)
+
+Roda o código Python direto, sem passar pelo Terraform nem pelo executor
+Docker de Lambda do LocalStack. Bom para iterar rápido no código.
+
+1. Exporte as variáveis de ambiente apontando pro LocalStack (qualquer
+   valor serve pras credenciais — o LocalStack não valida):
 
    ```bash
    export AWS_ENDPOINT_URL=http://localhost:4566
@@ -337,7 +348,7 @@ uma conta AWS real, use o ambiente local do
    `AWS_ENDPOINT_URL` é reconhecida nativamente pelo boto3/botocore
    (>=1.29) — nenhum código precisa mudar para apontar para o LocalStack em
    vez da AWS real.
-3. Rode o dispatcher direto, sem precisar de Terraform/deploy nenhum:
+2. Rode o dispatcher direto:
 
    ```bash
    python scripts/local_invoke.py
@@ -347,10 +358,71 @@ uma conta AWS real, use o ambiente local do
 
    O script carrega o evento de exemplo (`events/sqs_event.json` por
    padrão), chama `payment_handler.lambda_handler` e imprime o resultado.
-   Confira o item gravado
-   (`aws --endpoint-url=$AWS_ENDPOINT_URL dynamodb scan --table-name orders`)
-   e a mensagem publicada
-   (`aws --endpoint-url=$AWS_ENDPOINT_URL sqs receive-message --queue-url $SQS_PAGAMENTO_EFETUADO_QUEUE_URL`).
+
+### Opção B — Lambda publicada de verdade no LocalStack
+
+Cria a Lambda como um recurso Lambda de verdade dentro do LocalStack
+(usando o executor Docker dele), com o gatilho SQS ativo — ou seja, uma
+mensagem publicada na fila `sqs-pagamento-solicitar` dispara a Lambda
+sozinha, sem você chamar nada manualmente. Mais fiel ao comportamento real
+na AWS, mais lento pra iterar (cada mudança no código exige reaplicar o
+Terraform pra reempacotar e republicar).
+
+1. `terraform-local/` deste repositório: mesmo empacotamento do `terraform/`
+   real (instala `requirements.txt` + `src/` num zip), mas aponta pro
+   LocalStack e busca as filas já criadas pelo `oficina-infra-pagamento`
+   por nome (`data "aws_sqs_queue"`) — não precisa copiar URL/ARN
+   manualmente como no deploy real.
+
+   ```bash
+   terraform -chdir=terraform-local init
+   terraform -chdir=terraform-local apply
+   ```
+
+2. Teste publicando uma mensagem na fila de entrada — a Lambda é disparada
+   automaticamente pelo LocalStack:
+
+   ```bash
+   aws --endpoint-url=http://localhost:4566 sqs send-message \
+     --queue-url http://localhost:4566/000000000000/sqs-pagamento-solicitar \
+     --message-body file://events/sample_payment_payload.json
+   ```
+
+   (crie `events/sample_payment_payload.json` com o payload puro, sem o
+   wrapper de evento SQS.)
+
+3. Ou invoque a Lambda diretamente (sem passar pela fila), simulando
+   qualquer um dos dois gatilhos:
+
+   ```bash
+   aws --endpoint-url=http://localhost:4566 lambda invoke \
+     --function-name oficina-pagamento \
+     --payload file://events/sqs_event.json \
+     --cli-binary-format raw-in-base64-out \
+     out.json && cat out.json
+   ```
+
+4. Acompanhe os logs da execução:
+
+   ```bash
+   aws --endpoint-url=http://localhost:4566 logs tail \
+     /aws/lambda/oficina-pagamento --follow
+   ```
+
+> A variável `AWS_ENDPOINT_URL` da Lambda, nesse caso, é setada pelo
+> próprio `terraform-local/main.tf` como `http://host.docker.internal:4566`
+> — é o endereço que o container onde a Lambda roda (criado pelo executor
+> Docker do LocalStack) usa pra alcançar o container do LocalStack de
+> volta. Isso funciona no Docker Desktop (Windows/Mac); em Docker nativo no
+> Linux pode ser necessário trocar para o hostname do container
+> `oficina-localstack` ou `172.17.0.1`, dependendo da rede Docker.
+
+Em qualquer uma das duas opções, confira o resultado:
+
+```bash
+aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name orders
+aws --endpoint-url=http://localhost:4566 sqs receive-message --queue-url <url da fila efetuado/recusado>
+```
 
 O Mercado Pago em si **não** é mockado nesse fluxo — as chamadas HTTP vão
 para o sandbox real com o token `TEST-...`, já que é um sistema externo ao
