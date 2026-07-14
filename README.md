@@ -21,7 +21,7 @@ certa conforme o formato do evento recebido — ver `Arquitetura` abaixo.
 ```
                           ┌────────────────────────┐        ┌───────────────────┐
    sqs-pagamento-solicitar│                        │──────▶ │ Mercado Pago API  │
- ─────────────────────▶  │     PagamentoFunction    │        └─────────┬─────────┘
+ ─────────────────────▶  │    oficina-pagamento     │        └─────────┬─────────┘
                           │   (payment_handler.py)   │                  │
                           │  gatilho 1: fila SQS      │                  │ webhook (order)
                           │  gatilho 2: API Gateway   │ ◀────────────────┘
@@ -58,7 +58,7 @@ src/
     ├── security/
     │   └── webhook_signature.py         # Validação HMAC do header x-signature
     └── handlers/
-        ├── payment_handler.py           # Entry point ÚNICO da PagamentoFunction (dispatcher)
+        ├── payment_handler.py           # Entry point ÚNICO da Lambda oficina-pagamento (dispatcher)
         ├── sqs_handler.py               # Lógica do gatilho SQS (chamada pelo dispatcher)
         └── webhook_handler.py           # Lógica do gatilho webhook (chamada pelo dispatcher)
 ```
@@ -75,16 +75,18 @@ src/
   de SQS) não exige tocar em `domain/` nem `application/`.
 - `sqs_handler.py`/`webhook_handler.py` continuam sendo dois módulos com uma
   função `lambda_handler` cada — só que agora nenhum dos dois é referenciado
-  diretamente pelo `template.yaml`; quem é chamado pela AWS é sempre
+  diretamente pela infra (`terraform/`); quem é chamado pela AWS é sempre
   `payment_handler.lambda_handler`, que despacha para um dos dois conforme o
   formato do evento recebido (fila SQS sempre tem a chave `"Records"`).
 
 ## Pré-requisitos
 
 - Python 3.12+
-- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-- Docker (usado pelo SAM para build/execução local fiel ao ambiente Lambda)
+- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.10
 - Uma conta AWS configurada (`aws configure`)
+- Os recursos do [`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
+  já aplicados (filas SQS + tabela DynamoDB) — este repositório só cria a
+  Lambda e referencia esses recursos, não os cria
 - Access Token de produção/teste da sua aplicação no Mercado Pago
   (`APP_USR-...` ou `TEST-...`)
 - A chave secreta do webhook (painel **Webhooks** da aplicação no Mercado Pago)
@@ -97,15 +99,15 @@ src/
 | `MP_WEBHOOK_SECRET`                | gatilho webhook       | recomendada | Secret para validar o header `x-signature` |
 | `MP_API_BASE_URL`                  | os dois gatilhos      | não (default `https://api.mercadopago.com`) | Útil para apontar a um mock em testes |
 | `ORDERS_TABLE_NAME`                | os dois gatilhos      | não (default `orders`) | Nome da tabela DynamoDB |
-| `SQS_PAGAMENTO_EFETUADO_QUEUE_URL` | os dois gatilhos      | ✅ (setado automaticamente pelo `template.yaml`) | URL da fila `sqs-pagamento-efetuado` |
-| `SQS_PAGAMENTO_RECUSADO_QUEUE_URL` | gatilho SQS           | ✅ (setado automaticamente pelo `template.yaml`) | URL da fila `sqs-pagamento-recusado` |
+| `SQS_PAGAMENTO_EFETUADO_QUEUE_URL` | os dois gatilhos      | ✅ (setado automaticamente pelo `terraform/`) | URL da fila `sqs-pagamento-efetuado` |
+| `SQS_PAGAMENTO_RECUSADO_QUEUE_URL` | gatilho SQS           | ✅ (setado automaticamente pelo `terraform/`) | URL da fila `sqs-pagamento-recusado` |
 | `MP_HTTP_TIMEOUT_SECONDS`          | os dois gatilhos      | não (default `10`) | Timeout das chamadas HTTP ao Mercado Pago |
 | `AWS_ENDPOINT_URL`                 | os dois gatilhos      | não | Aponta o boto3 para o LocalStack em vez da AWS real (ver seção "Testando contra o LocalStack") |
 
 > Em produção, prefira buscar `MP_ACCESS_TOKEN` e `MP_WEBHOOK_SECRET` do
 > **AWS Secrets Manager** ou **SSM Parameter Store** em vez de variáveis de
-> ambiente em texto plano. O `template.yaml` já isola esses valores como
-> `Parameters` com `NoEcho: true` para facilitar essa migração depois.
+> ambiente em texto plano. No `terraform/`, esses dois valores já são
+> `variable`s `sensitive = true` para facilitar essa migração depois.
 
 ## Instalação para desenvolvimento local
 
@@ -130,74 +132,88 @@ Os testes cobrem:
 - Os dois `lambda_handler` de ponta a ponta, com dependências externas
   mockadas (`test_sqs_handler.py`, `test_webhook_handler.py`)
 
-## Build e deploy (AWS SAM)
+## CI/CD (GitHub Actions)
+
+- **`.github/workflows/ci.yml`** — roda em todo push (exceto direto em
+  `main`) e em PRs para `main`: `pytest -v` e, num job separado,
+  `terraform fmt -check` + `terraform init -backend=false` +
+  `terraform validate` dentro de `terraform/`. Não precisa de credenciais
+  AWS.
+- **`.github/workflows/terraform-apply-pagamento.yml`** — dispara no push
+  pra `main` (ou seja, no merge do PR): `terraform init`/`plan`/`apply` de
+  verdade, criando/atualizando a Lambda, o gatilho SQS e o endpoint de
+  webhook. Depende de Secrets/Variables configurados no repositório (veja
+  abaixo) e do resultado ainda é incerto: a AWS Academy pode não liberar
+  `lambda:CreateFunction`/`apigateway:*` pro usuário `voclabs`, mesmo com a
+  Lambda usando a `LabRole` como execution role — é o mesmo tipo de
+  bloqueio de permissão já visto no
+  [`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
+  pras filas SQS.
+
+### Secrets e Variables necessários no GitHub (Settings → Secrets and variables → Actions)
+
+**Secrets:**
+
+| Secret | Descrição |
+|--------|-----------|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` | Credenciais AWS (mesmas do `oficina-infra-pagamento`) |
+| `AWS_REGION` | Região AWS |
+| `TF_STATE_BUCKET` | Bucket S3 do state Terraform (pode ser o mesmo do outro repo, com chave de state diferente) |
+| `MP_ACCESS_TOKEN` | Access Token do Mercado Pago |
+| `MP_WEBHOOK_SECRET` | Secret do webhook (pode ficar vazio) |
+
+**Variables** (copiadas manualmente dos outputs do `oficina-infra-pagamento`
+depois que os workflows de apply de lá rodarem — veja o README daquele
+repositório):
+
+| Variable | De onde vem |
+|----------|-------------|
+| `SOLICITAR_QUEUE_ARN` | `terraform -chdir=terraform output` → fila `sqs-pagamento-solicitar`, `queue_arn` |
+| `EFETUADO_QUEUE_URL` | idem, fila `sqs-pagamento-efetuado`, `queue_url` |
+| `RECUSADO_QUEUE_URL` | idem, fila `sqs-pagamento-recusado`, `queue_url` |
+| `ORDERS_TABLE_NAME` | `terraform -chdir=terraform-dynamodb output` → `table_name` |
+
+## Build e deploy (Terraform)
 
 ```bash
-sam build
-sam deploy --guided
+cd terraform
+terraform init
+terraform apply \
+  -var="aws_region=us-east-1" \
+  -var="mp_access_token=TEST-xxxxxxx" \
+  -var="solicitar_queue_arn=<output do oficina-infra-pagamento>" \
+  -var="efetuado_queue_url=<output do oficina-infra-pagamento>" \
+  -var="recusado_queue_url=<output do oficina-infra-pagamento>" \
+  -var="orders_table_name=orders"
 ```
 
-No modo `--guided`, informe:
-- **Stack Name**: ex. `mp-pix-integration`
-- **AWS Region**: a região onde deseja implantar
-- **MercadoPagoAccessToken**: seu Access Token
-- **MercadoPagoWebhookSecret**: o secret do painel de Webhooks (pode deixar
-  em branco em ambiente de teste, mas configure em produção)
-- Confirme a criação de roles do IAM (`CAPABILITY_IAM`)
+`terraform/main.tf` empacota a Lambda sozinho (instala `requirements.txt`
+em `build/`, copia `src/` e zipa — sem precisar do SAM CLI) e usa a
+`LabRole` da AWS Academy diretamente como execution role (`role =
+var.lab_role_arn`), então não tenta criar nenhuma IAM role nova.
 
-Ao final, o SAM mostra os **Outputs**: a URL da fila SQS e a URL do endpoint
-de webhook gerado pelo API Gateway.
+Ao final, `terraform output` mostra a URL do endpoint de webhook gerado
+pelo API Gateway (formato
+`https://{api-id}.execute-api.{region}.amazonaws.com/api/webhooks/mercadopago`
+— API Gateway HTTP API, sem prefixo de stage tipo `/Prod`).
 
 ### Apontando seu domínio customizado para o webhook
 
-Você mencionou o endpoint `https://kortextecnologia.com.br/api/webhooks/mercadopago`.
-O API Gateway gera, por padrão, uma URL do tipo
-`https://{api-id}.execute-api.{region}.amazonaws.com/Prod/api/webhooks/mercadopago`.
-Para usar seu próprio domínio:
+Para usar um domínio próprio em vez da URL gerada pelo API Gateway:
 
 1. Solicite/valide um certificado no **AWS Certificate Manager (ACM)** para
-   `kortextecnologia.com.br` (ou um subdomínio dedicado, ex.
-   `api.kortextecnologia.com.br`).
-2. Crie um **Custom Domain Name** no API Gateway apontando esse certificado.
-3. Crie um **Base Path Mapping** ligando o domínio customizado ao stage
-   `Prod` desta API.
-4. No seu provedor de DNS, crie um registro `CNAME`/`ALIAS` apontando
-   `kortextecnologia.com.br` (ou o subdomínio escolhido) para o endpoint
-   regional/edge gerado pelo Custom Domain Name.
-5. Só depois disso, configure a URL final no painel de Webhooks do Mercado
+   o domínio/subdomínio desejado.
+2. Crie um `aws_apigatewayv2_domain_name` + `aws_apigatewayv2_api_mapping`
+   apontando pro `aws_apigatewayv2_api.webhook` deste `terraform/`.
+3. No seu provedor de DNS, crie um registro `CNAME`/`ALIAS` apontando para
+   o endpoint regional gerado pelo domínio customizado.
+4. Só depois disso, configure a URL final no painel de Webhooks do Mercado
    Pago com o tópico **Orders (order)**.
-
-## Testando localmente (sem deploy)
-
-Como agora existe uma única função (`PagamentoFunction`), o `--event`
-escolhido é que determina qual gatilho é simulado (`payment_handler.py`
-despacha pelo formato do evento).
-
-**Simulando o gatilho SQS** com o evento de exemplo em `events/sqs_event.json`:
-
-```bash
-sam local invoke PagamentoFunction \
-  --event events/sqs_event.json \
-  --parameter-overrides MercadoPagoAccessToken=TEST-xxxxxxx
-```
-
-**Simulando o gatilho webhook** com o evento de exemplo em `events/webhook_event.json`:
-
-```bash
-sam local invoke PagamentoFunction \
-  --event events/webhook_event.json \
-  --parameter-overrides MercadoPagoAccessToken=TEST-xxxxxxx MercadoPagoWebhookSecret=""
-```
-
-> Deixe `MercadoPagoWebhookSecret` vazio localmente para pular a validação de
-> assinatura, já que gerar um `x-signature` válido manualmente exige calcular
-> o HMAC — veja `tests/unit/test_webhook_signature.py` para um exemplo de como
-> essa assinatura é gerada.
 
 **Testando o webhook já implantado, via curl:**
 
 ```bash
-curl -i -X POST https://kortextecnologia.com.br/api/webhooks/mercadopago \
+curl -i -X POST <webhook_endpoint do terraform output> \
   -H "Content-Type: application/json" \
   -d '{"action": "order.updated", "type": "order", "data": {"id": "ORDTST01KWW9Z6D4YVRVAB6VTJWYN33G"}}'
 ```
@@ -206,12 +222,15 @@ curl -i -X POST https://kortextecnologia.com.br/api/webhooks/mercadopago \
 
 ```bash
 aws sqs send-message \
-  --queue-url <URL_DA_FILA_NO_OUTPUT_DO_SAM_DEPLOY> \
+  --queue-url <SOLICITAR_QUEUE_URL do oficina-infra-pagamento> \
   --message-body file://events/sample_payment_payload.json
 ```
 
 (crie `events/sample_payment_payload.json` com o mesmo JSON do enunciado, sem
 o wrapper de evento SQS — apenas o payload puro).
+
+Para testar sem depender de nenhum deploy real (nem AWS, nem permissões da
+Academy), veja a seção "Testando contra o LocalStack" abaixo.
 
 ## Filas de saída: `sqs-pagamento-efetuado` e `sqs-pagamento-recusado`
 
@@ -318,22 +337,20 @@ uma conta AWS real, use o ambiente local do
    `AWS_ENDPOINT_URL` é reconhecida nativamente pelo boto3/botocore
    (>=1.29) — nenhum código precisa mudar para apontar para o LocalStack em
    vez da AWS real.
-3. Rode o dispatcher direto, sem precisar do SAM/Docker:
+3. Rode o dispatcher direto, sem precisar de Terraform/deploy nenhum:
 
    ```bash
    python scripts/local_invoke.py
+   # ou, pro evento de webhook:
+   python scripts/local_invoke.py events/webhook_event.json
    ```
 
-   O script carrega `events/sqs_event.json`, chama
-   `payment_handler.lambda_handler` e imprime o resultado. Confira o item
-   gravado (`aws --endpoint-url=$AWS_ENDPOINT_URL dynamodb scan --table-name orders`)
+   O script carrega o evento de exemplo (`events/sqs_event.json` por
+   padrão), chama `payment_handler.lambda_handler` e imprime o resultado.
+   Confira o item gravado
+   (`aws --endpoint-url=$AWS_ENDPOINT_URL dynamodb scan --table-name orders`)
    e a mensagem publicada
    (`aws --endpoint-url=$AWS_ENDPOINT_URL sqs receive-message --queue-url $SQS_PAGAMENTO_EFETUADO_QUEUE_URL`).
-
-   `sam local invoke` (seção anterior) continua funcionando como
-   alternativa de maior fidelidade ao runtime da Lambda — nesse caso, passe
-   as mesmas variáveis via `--parameter-overrides`/`--env-vars` e use
-   `--docker-network` para a rede do container do LocalStack.
 
 O Mercado Pago em si **não** é mockado nesse fluxo — as chamadas HTTP vão
 para o sandbox real com o token `TEST-...`, já que é um sistema externo ao
