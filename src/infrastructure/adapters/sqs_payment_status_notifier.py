@@ -14,20 +14,24 @@ logger = logging.getLogger(__name__)
 
 class SQSPaymentStatusNotifier(PaymentStatusNotifierPort):
     """
-    Adapter de saída que publica o status do pagamento na fila
-    'sqs-retorno-pagamento', para que outros sistemas/serviços consumam essa
+    Adapter de saída que publica o resultado do pagamento em
+    'sqs-pagamento-efetuado' (sucesso/confirmação) ou 'sqs-pagamento-recusado'
+    (falha no gateway), para que outros sistemas/serviços consumam essa
     informação (ex.: atualizar o status do pedido no seu backend/e-commerce).
     """
 
-    def __init__(self, queue_url: str = None, client=None):
-        self._queue_url = queue_url or settings.RETORNO_PAGAMENTO_QUEUE_URL
+    def __init__(self, efetuado_queue_url: str = None, recusado_queue_url: str = None, client=None):
+        self._efetuado_queue_url = efetuado_queue_url or settings.SQS_PAGAMENTO_EFETUADO_QUEUE_URL
+        self._recusado_queue_url = recusado_queue_url or settings.SQS_PAGAMENTO_RECUSADO_QUEUE_URL
         self._client = client or boto3.client("sqs", region_name=settings.AWS_REGION)
 
     def notify(self, order: Order, status: str) -> None:
-        if not self._queue_url:
+        queue_url = self._queue_url_for(status)
+
+        if not queue_url:
             logger.warning(
-                "RETORNO_PAGAMENTO_QUEUE_URL não configurado — a mensagem de "
-                "status '%s' NÃO foi publicada para a order %s.",
+                "Fila de destino para o status '%s' não configurada — a "
+                "mensagem NÃO foi publicada para a order %s.",
                 status,
                 order.id,
             )
@@ -36,15 +40,21 @@ class SQSPaymentStatusNotifier(PaymentStatusNotifierPort):
         message = self._build_message(order, status)
 
         logger.info(
-            "Publicando status '%s' na fila sqs-retorno-pagamento | order_id=%s",
+            "Publicando status '%s' na fila %s | order_id=%s",
             status,
+            queue_url,
             order.id,
         )
 
         self._client.send_message(
-            QueueUrl=self._queue_url,
+            QueueUrl=queue_url,
             MessageBody=json.dumps(message),
         )
+
+    def _queue_url_for(self, status: str) -> str:
+        if status == PaymentStatus.RECUSADO:
+            return self._recusado_queue_url
+        return self._efetuado_queue_url
 
     @staticmethod
     def _build_message(order: Order, status: str) -> dict:
@@ -62,9 +72,9 @@ class SQSPaymentStatusNotifier(PaymentStatusNotifierPort):
         }
 
         # Os dados do QR Code Pix só fazem sentido na primeira mensagem
-        # (solicitado-pix) — é o que a aplicação cliente precisa para exibir
-        # a cobrança ao pagador.
-        if status == PaymentStatus.SOLICITADO_PIX and first_payment:
+        # (efetuado) — é o que a aplicação cliente precisa para exibir a
+        # cobrança ao pagador.
+        if status == PaymentStatus.EFETUADO and first_payment:
             message["pix"] = {
                 "payment_id": first_payment.id,
                 "qr_code": first_payment.qr_code,

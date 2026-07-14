@@ -2,11 +2,14 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   Integração de pagamentos Pix via Mercado Pago Orders API - arquitetura
-  hexagonal (ports & adapters). Contém duas Lambdas:
-    1) CreatePaymentOrderFunction - consumidora da fila sqs-solicitar-pagamento,
-       responsável por criar Orders no Mercado Pago.
-    2) WebhookFunction - recebe as notificações (webhook) do Mercado Pago
-       para o tópico "order" e atualiza o status do pedido.
+  hexagonal (ports & adapters). Uma única Lambda (PagamentoFunction) com
+  dois gatilhos:
+    1) SQSTrigger - consome a fila 'sqs-pagamento-solicitar' e cria Orders
+       no Mercado Pago. Publica em 'sqs-pagamento-efetuado' (sucesso) ou
+       'sqs-pagamento-recusado' (falha no gateway).
+    2) WebhookApi - recebe as notificações (webhook) do Mercado Pago para o
+       tópico "order", atualiza o status do pedido e, quando confirmado
+       como pago, publica novamente em 'sqs-pagamento-efetuado'.
 
 Globals:
   Function:
@@ -17,7 +20,8 @@ Globals:
     Environment:
       Variables:
         ORDERS_TABLE_NAME: !Ref OrdersTable
-        RETORNO_PAGAMENTO_QUEUE_URL: !Ref RetornoPagamentoQueue
+        SQS_PAGAMENTO_EFETUADO_QUEUE_URL: !Ref EfetuadoPagamentoQueue
+        SQS_PAGAMENTO_RECUSADO_QUEUE_URL: !Ref RecusadoPagamentoQueue
         MP_API_BASE_URL: https://api.mercadopago.com
 
 Parameters:
@@ -42,32 +46,37 @@ Parameters:
 Resources:
 
   # ---------------------------------------------------------------------
-  # Fila SQS que dispara a criação de orders + Dead Letter Queue
+  # Fila SQS que dispara o processamento do pagamento + Dead Letter Queue
   # ---------------------------------------------------------------------
   SolicitarPagamentoDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: sqs-solicitar-pagamento-dlq
+      QueueName: sqs-pagamento-solicitar-dlq
       MessageRetentionPeriod: 1209600 # 14 dias
 
   SolicitarPagamentoQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: sqs-solicitar-pagamento
+      QueueName: sqs-pagamento-solicitar
       VisibilityTimeout: 90 # boa prática: >= 6x o timeout da função (15s)
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt SolicitarPagamentoDLQ.Arn
         maxReceiveCount: 5
 
   # ---------------------------------------------------------------------
-  # Fila SQS de saída: publicamos aqui o status resumido de cada pagamento
-  # ('solicitado-pix' ao criar a order, 'pago' quando o webhook confirma o
-  # pagamento) para o restante do sistema consumir.
+  # Filas de saída: publicamos aqui o resultado de cada tentativa de
+  # pagamento, para o restante do sistema consumir.
   # ---------------------------------------------------------------------
-  RetornoPagamentoQueue:
+  EfetuadoPagamentoQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: sqs-retorno-pagamento
+      QueueName: sqs-pagamento-efetuado
+      MessageRetentionPeriod: 345600 # 4 dias
+
+  RecusadoPagamentoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: sqs-pagamento-recusado
       MessageRetentionPeriod: 345600 # 4 dias
 
   # ---------------------------------------------------------------------
@@ -86,41 +95,14 @@ Resources:
           KeyType: HASH
 
   # ---------------------------------------------------------------------
-  # Lambda consumidora da fila SQS - cria a order no Mercado Pago
+  # Lambda única do domínio de pagamento: consome a fila de solicitação e
+  # recebe o webhook do Mercado Pago (dois Events na mesma função).
   # ---------------------------------------------------------------------
-  CreatePaymentOrderFunction:
+  PagamentoFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: create-payment-order
-      Handler: src.infrastructure.handlers.sqs_handler.lambda_handler
-      CodeUri: .
-      Environment:
-        Variables:
-          MP_ACCESS_TOKEN: !Ref MercadoPagoAccessToken
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref OrdersTable
-        - SQSPollerPolicy:
-            QueueName: !GetAtt SolicitarPagamentoQueue.QueueName
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt RetornoPagamentoQueue.QueueName
-      Events:
-        SQSTrigger:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt SolicitarPagamentoQueue.Arn
-            BatchSize: 10
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
-
-  # ---------------------------------------------------------------------
-  # Lambda que recebe o webhook (notificações) do Mercado Pago
-  # ---------------------------------------------------------------------
-  WebhookFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: mercadopago-webhook
-      Handler: src.infrastructure.handlers.webhook_handler.lambda_handler
+      FunctionName: oficina-pagamento
+      Handler: src.infrastructure.handlers.payment_handler.lambda_handler
       CodeUri: .
       Environment:
         Variables:
@@ -129,9 +111,20 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref OrdersTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt SolicitarPagamentoQueue.QueueName
         - SQSSendMessagePolicy:
-            QueueName: !GetAtt RetornoPagamentoQueue.QueueName
+            QueueName: !GetAtt EfetuadoPagamentoQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt RecusadoPagamentoQueue.QueueName
       Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SolicitarPagamentoQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
         WebhookApi:
           Type: Api
           Properties:
@@ -140,18 +133,24 @@ Resources:
 
 Outputs:
   SolicitarPagamentoQueueUrl:
-    Description: URL da fila SQS que dispara a criação de orders.
+    Description: URL da fila SQS que dispara o processamento do pagamento.
     Value: !Ref SolicitarPagamentoQueue
 
   SolicitarPagamentoQueueArn:
     Description: ARN da fila SQS (útil para outros serviços publicarem nela).
     Value: !GetAtt SolicitarPagamentoQueue.Arn
 
-  RetornoPagamentoQueueUrl:
+  EfetuadoPagamentoQueueUrl:
     Description: >
-      URL da fila SQS onde são publicados os status resumidos
-      ('solicitado-pix' e 'pago') de cada pagamento.
-    Value: !Ref RetornoPagamentoQueue
+      URL da fila SQS onde é publicado o resultado de sucesso (Pix
+      solicitado ou pagamento confirmado) de cada tentativa de pagamento.
+    Value: !Ref EfetuadoPagamentoQueue
+
+  RecusadoPagamentoQueueUrl:
+    Description: >
+      URL da fila SQS onde é publicado o resultado de falha (gateway
+      recusou/erro) de cada tentativa de pagamento.
+    Value: !Ref RecusadoPagamentoQueue
 
   WebhookEndpoint:
     Description: >

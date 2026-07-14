@@ -74,13 +74,14 @@ class ProcessOrderWebhookUseCase:
         )
 
         if self._is_paid(order):
-            # Publica na fila 'sqs-retorno-pagamento' avisando que o
-            # pagamento foi confirmado.
+            # Publica em 'sqs-pagamento-efetuado' avisando que o pagamento
+            # foi confirmado (mesma fila usada pela criação bem-sucedida da
+            # order, já que o domínio só distingue efetuado/recusado).
             self._payment_status_notifier.notify(order, PaymentStatus.PAGO)
         else:
             logger.info(
                 "Order %s ainda não está confirmada como paga (status=%s/%s) "
-                "— nada foi publicado na fila de retorno.",
+                "— nada foi publicado.",
                 order.id,
                 order.status,
                 order.status_detail,

@@ -5,12 +5,12 @@ from src.domain.entities import Order
 
 class PaymentStatusNotifierPort(ABC):
     """
-    Porta (interface) de saída para publicar atualizações de status de
-    pagamento para o restante do seu sistema, através da fila
-    'sqs-retorno-pagamento'.
+    Porta (interface) de saída para publicar o resultado do pagamento para o
+    restante do seu sistema, através das filas 'sqs-pagamento-efetuado' ou
+    'sqs-pagamento-recusado'.
     """
 
     @abstractmethod
     def notify(self, order: Order, status: str) -> None:
-        """Publica uma mensagem informando o novo status (ex.: 'solicitado-pix', 'pago')."""
+        """Publica uma mensagem informando o novo status (ex.: 'efetuado', 'recusado', 'pago')."""
         raise NotImplementedError

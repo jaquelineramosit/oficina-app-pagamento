@@ -5,6 +5,9 @@ from src.domain.entities import Order, PaymentResult
 from src.domain.payment_status import PaymentStatus
 from src.infrastructure.adapters.sqs_payment_status_notifier import SQSPaymentStatusNotifier
 
+EFETUADO_QUEUE_URL = "https://sqs.fake/sqs-pagamento-efetuado"
+RECUSADO_QUEUE_URL = "https://sqs.fake/sqs-pagamento-recusado"
+
 
 def _order_with_pix_payment():
     payment = PaymentResult(
@@ -28,26 +31,34 @@ def _order_with_pix_payment():
     )
 
 
-def test_notify_sends_message_with_pix_data_when_solicitado_pix():
-    client = MagicMock()
-    notifier = SQSPaymentStatusNotifier(queue_url="https://sqs.fake/sqs-retorno-pagamento", client=client)
+def _build_notifier(client):
+    return SQSPaymentStatusNotifier(
+        efetuado_queue_url=EFETUADO_QUEUE_URL,
+        recusado_queue_url=RECUSADO_QUEUE_URL,
+        client=client,
+    )
 
-    notifier.notify(_order_with_pix_payment(), PaymentStatus.SOLICITADO_PIX)
+
+def test_notify_sends_message_with_pix_data_when_efetuado():
+    client = MagicMock()
+    notifier = _build_notifier(client)
+
+    notifier.notify(_order_with_pix_payment(), PaymentStatus.EFETUADO)
 
     client.send_message.assert_called_once()
     kwargs = client.send_message.call_args.kwargs
-    assert kwargs["QueueUrl"] == "https://sqs.fake/sqs-retorno-pagamento"
+    assert kwargs["QueueUrl"] == EFETUADO_QUEUE_URL
 
     body = json.loads(kwargs["MessageBody"])
     assert body["order_id"] == "ORDTST01"
-    assert body["status"] == "solicitado-pix"
+    assert body["status"] == "efetuado"
     assert body["pix"]["qr_code"] == "00020126...AAB6"
     assert body["pix"]["ticket_url"].startswith("https://www.mercadopago.com.br")
 
 
 def test_notify_sends_message_without_pix_data_when_pago():
     client = MagicMock()
-    notifier = SQSPaymentStatusNotifier(queue_url="https://sqs.fake/sqs-retorno-pagamento", client=client)
+    notifier = _build_notifier(client)
 
     order = _order_with_pix_payment()
     order.status = "processed"
@@ -55,16 +66,35 @@ def test_notify_sends_message_without_pix_data_when_pago():
 
     notifier.notify(order, PaymentStatus.PAGO)
 
-    body = json.loads(client.send_message.call_args.kwargs["MessageBody"])
+    kwargs = client.send_message.call_args.kwargs
+    assert kwargs["QueueUrl"] == EFETUADO_QUEUE_URL
+
+    body = json.loads(kwargs["MessageBody"])
     assert body["status"] == "pago"
     assert body["mercado_pago_status"] == "processed"
     assert "pix" not in body
 
 
+def test_notify_sends_message_to_recusado_queue():
+    client = MagicMock()
+    notifier = _build_notifier(client)
+
+    order = Order(id="order_test_001", external_reference="order_test_001", status="recusado")
+
+    notifier.notify(order, PaymentStatus.RECUSADO)
+
+    kwargs = client.send_message.call_args.kwargs
+    assert kwargs["QueueUrl"] == RECUSADO_QUEUE_URL
+
+    body = json.loads(kwargs["MessageBody"])
+    assert body["status"] == "recusado"
+    assert "pix" not in body
+
+
 def test_notify_skips_when_queue_url_is_not_configured():
     client = MagicMock()
-    notifier = SQSPaymentStatusNotifier(queue_url="", client=client)
+    notifier = SQSPaymentStatusNotifier(efetuado_queue_url="", recusado_queue_url="", client=client)
 
-    notifier.notify(_order_with_pix_payment(), PaymentStatus.SOLICITADO_PIX)
+    notifier.notify(_order_with_pix_payment(), PaymentStatus.EFETUADO)
 
     client.send_message.assert_not_called()

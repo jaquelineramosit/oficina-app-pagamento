@@ -50,11 +50,12 @@ def test_execute_calls_gateway_and_repository():
 
     gateway.create_order.assert_called_once()
     repository.save_created_order.assert_called_once()
+    assert result["outcome"] == "efetuado"
     assert result["order_id"] == "ORDTST01"
     assert result["status"] == "action_required"
 
 
-def test_execute_publishes_solicitado_pix_status():
+def test_execute_publishes_efetuado_status():
     use_case, gateway, repository, notifier = _build_use_case()
 
     use_case.execute(VALID_PAYLOAD)
@@ -62,7 +63,7 @@ def test_execute_publishes_solicitado_pix_status():
     notifier.notify.assert_called_once()
     notified_order, notified_status = notifier.notify.call_args.args
     assert notified_order.id == "ORDTST01"
-    assert notified_status == PaymentStatus.SOLICITADO_PIX
+    assert notified_status == PaymentStatus.EFETUADO
 
 
 def test_same_external_reference_always_uses_the_same_idempotency_key():
@@ -100,12 +101,36 @@ def test_execute_raises_on_invalid_payload_without_calling_gateway():
     notifier.notify.assert_not_called()
 
 
-def test_execute_propagates_gateway_error_without_saving_or_notifying():
+def test_execute_handles_gateway_error_by_persisting_and_notifying_recusado():
     use_case, gateway, repository, notifier = _build_use_case()
     gateway.create_order.side_effect = PaymentGatewayError("timeout")
 
-    with pytest.raises(PaymentGatewayError):
+    result = use_case.execute(VALID_PAYLOAD)
+
+    # Recusa do gateway é um resultado de negócio: não deve propagar,
+    # e sim persistir + notificar como recusado.
+    assert result["outcome"] == "recusado"
+    assert result["external_reference"] == "order_test_001"
+
+    repository.save_created_order.assert_called_once()
+    persisted_order = repository.save_created_order.call_args.args[0]
+    assert persisted_order.id == "order_test_001"
+    assert persisted_order.status == "recusado"
+
+    notifier.notify.assert_called_once()
+    notified_order, notified_status = notifier.notify.call_args.args
+    assert notified_order.id == "order_test_001"
+    assert notified_status == PaymentStatus.RECUSADO
+
+
+def test_execute_propagates_error_when_persisting_recusado_fails():
+    use_case, gateway, repository, notifier = _build_use_case()
+    gateway.create_order.side_effect = PaymentGatewayError("timeout")
+    repository.save_created_order.side_effect = RuntimeError("DynamoDB indisponível")
+
+    # Falha de infraestrutura ao registrar a recusa deve propagar (para o
+    # handler tratar como retry) — diferente da recusa do gateway em si.
+    with pytest.raises(RuntimeError):
         use_case.execute(VALID_PAYLOAD)
 
-    repository.save_created_order.assert_not_called()
     notifier.notify.assert_not_called()
