@@ -30,8 +30,12 @@ class Settings:
         return os.environ.get("ORDERS_TABLE_NAME", "orders")
 
     @property
-    def RETORNO_PAGAMENTO_QUEUE_URL(self) -> str:
-        return os.environ.get("RETORNO_PAGAMENTO_QUEUE_URL", "")
+    def SQS_PAGAMENTO_EFETUADO_QUEUE_URL(self) -> str:
+        return os.environ.get("SQS_PAGAMENTO_EFETUADO_QUEUE_URL", "")
+
+    @property
+    def SQS_PAGAMENTO_RECUSADO_QUEUE_URL(self) -> str:
+        return os.environ.get("SQS_PAGAMENTO_RECUSADO_QUEUE_URL", "")
 
     @property
     def HTTP_TIMEOUT_SECONDS(self) -> float:

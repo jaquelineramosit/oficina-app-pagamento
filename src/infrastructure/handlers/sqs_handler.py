@@ -21,7 +21,7 @@ _use_case = CreatePaymentOrderUseCase(_payment_gateway, _order_repository, _paym
 
 def lambda_handler(event, context):
     """
-    Entry point acionado pela fila SQS 'sqs-solicitar-pagamento'.
+    Entry point acionado pela fila SQS 'sqs-pagamento-solicitar'.
 
     Implementa "partial batch response": se uma mensagem específica do lote
     falhar, apenas ela volta para a fila (ou eventualmente para a DLQ),
@@ -40,8 +40,11 @@ def lambda_handler(event, context):
         try:
             body = json.loads(record["body"])
             result = _use_case.execute(body)
+            # Tanto "efetuado" quanto "recusado" são resultados de negócio
+            # já persistidos/notificados pelo use case — nenhum dos dois
+            # entra em batch_item_failures (não há o que reprocessar).
             logger.info(
-                "Mensagem processada com sucesso | messageId=%s | resultado=%s",
+                "Mensagem processada | messageId=%s | resultado=%s",
                 message_id,
                 result,
             )
@@ -56,8 +59,10 @@ def lambda_handler(event, context):
             logger.error("Payload inválido | messageId=%s | erro=%s", message_id, exc)
 
         except PaymentGatewayError as exc:
-            # Erro de comunicação/negócio no Mercado Pago (rede, 5xx, etc.):
-            # vale a pena reprocessar, então marcamos como falha do lote.
+            # Rede de segurança: no fluxo normal o use case já captura
+            # PaymentGatewayError internamente (vira outcome "recusado").
+            # Se mesmo assim uma escapar (bug, uso direto do use case sem
+            # esse tratamento, etc.), tratamos como falha de lote.
             logger.error(
                 "Erro no gateway de pagamento | messageId=%s | erro=%s", message_id, exc
             )
