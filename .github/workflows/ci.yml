@@ -35,12 +35,16 @@ jobs:
         run: pytest -v
 
   validate-terraform:
-    name: Validar terraform/
+    name: Validar Terraform
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        working-directory: [ terraform, terraform-local ]
 
     defaults:
       run:
-        working-directory: terraform
+        working-directory: ${{ matrix.working-directory }}
 
     steps:
       - name: Checkout

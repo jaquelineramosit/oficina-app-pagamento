@@ -10,6 +10,9 @@ venv/
 terraform/.terraform/
 terraform/build/
 terraform/build.zip
+terraform-local/.terraform/
+terraform-local/build/
+terraform-local/build.zip
 *.tfstate
 *.tfstate.*
 *.tfplan
