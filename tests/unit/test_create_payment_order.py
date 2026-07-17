@@ -123,6 +123,24 @@ def test_execute_handles_gateway_error_by_persisting_and_notifying_recusado():
     assert notified_status == PaymentStatus.RECUSADO
 
 
+def test_handle_gateway_error_as_recusado_persists_and_notifies():
+    use_case, gateway, repository, notifier = _build_use_case()
+    exc = PaymentGatewayError("timeout inesperado fora do fluxo normal")
+
+    result = use_case.handle_gateway_error_as_recusado(VALID_PAYLOAD, exc)
+
+    # Mesmo comportamento do fluxo normal de recusa: não propaga, persiste
+    # e notifica em vez de deixar a mensagem ser reprocessada indefinidamente.
+    assert result["outcome"] == "recusado"
+    assert result["external_reference"] == "order_test_001"
+    gateway.create_order.assert_not_called()
+
+    repository.save_created_order.assert_called_once()
+    notifier.notify.assert_called_once()
+    notified_order, notified_status = notifier.notify.call_args.args
+    assert notified_status == PaymentStatus.RECUSADO
+
+
 def test_execute_propagates_error_when_persisting_recusado_fails():
     use_case, gateway, repository, notifier = _build_use_case()
     gateway.create_order.side_effect = PaymentGatewayError("timeout")

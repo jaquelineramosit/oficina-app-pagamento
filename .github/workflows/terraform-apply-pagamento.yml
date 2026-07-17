@@ -39,6 +39,7 @@ jobs:
       SOLICITAR_QUEUE_ARN: ${{ vars.SOLICITAR_QUEUE_ARN }}
       EFETUADO_QUEUE_URL: ${{ vars.EFETUADO_QUEUE_URL }}
       RECUSADO_QUEUE_URL: ${{ vars.RECUSADO_QUEUE_URL }}
+      SOLICITAR_DLQ_QUEUE_URL: ${{ vars.SOLICITAR_DLQ_QUEUE_URL }}
       ORDERS_TABLE_NAME: ${{ vars.ORDERS_TABLE_NAME || 'orders' }}
 
     steps:
@@ -90,6 +91,7 @@ jobs:
             printf 'TF_VAR_solicitar_queue_arn=%s\n' "${SOLICITAR_QUEUE_ARN}"
             printf 'TF_VAR_efetuado_queue_url=%s\n' "${EFETUADO_QUEUE_URL}"
             printf 'TF_VAR_recusado_queue_url=%s\n' "${RECUSADO_QUEUE_URL}"
+            printf 'TF_VAR_solicitar_dlq_queue_url=%s\n' "${SOLICITAR_DLQ_QUEUE_URL:-}"
             printf 'TF_VAR_orders_table_name=%s\n' "${ORDERS_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
 

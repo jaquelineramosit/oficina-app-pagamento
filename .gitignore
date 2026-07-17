@@ -6,6 +6,7 @@ venv/
 .venv/
 *.egg-info/
 .idea/
+.claude/
 
 terraform/.terraform/
 terraform/build/

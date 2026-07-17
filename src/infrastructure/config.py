@@ -38,6 +38,10 @@ class Settings:
         return os.environ.get("SQS_PAGAMENTO_RECUSADO_QUEUE_URL", "")
 
     @property
+    def SQS_PAGAMENTO_SOLICITAR_DLQ_URL(self) -> str:
+        return os.environ.get("SQS_PAGAMENTO_SOLICITAR_DLQ_URL", "")
+
+    @property
     def HTTP_TIMEOUT_SECONDS(self) -> float:
         return float(os.environ.get("MP_HTTP_TIMEOUT_SECONDS", "10"))
 

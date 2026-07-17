@@ -85,6 +85,17 @@ class CreatePaymentOrderUseCase:
             "external_reference": order.external_reference,
         }
 
+    def handle_gateway_error_as_recusado(self, raw_payload: dict, exc: PaymentGatewayError) -> dict:
+        """
+        Usado pelo handler quando um PaymentGatewayError escapa do fluxo
+        normal de execute() (rede de segurança para bugs — ver comentário no
+        passo 3 acima). Trata a recusa da mesma forma que o fluxo normal:
+        persiste e publica em 'sqs-pagamento-recusado', em vez de reprocessar
+        a mensagem indefinidamente.
+        """
+        order_request = OrderRequest.from_dict(raw_payload)
+        return self._handle_recusado(order_request, exc)
+
     def _handle_recusado(self, order_request: OrderRequest, exc: PaymentGatewayError) -> dict:
         logger.warning(
             "Gateway de pagamento recusou a order | external_reference=%s | erro=%s",

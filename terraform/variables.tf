@@ -40,7 +40,7 @@ variable "mp_webhook_secret" {
 }
 
 variable "solicitar_queue_arn" {
-  description = "ARN da fila sqs-pagamento-solicitar (criada no oficina-infra-pagamento), usada para o gatilho SQS da Lambda."
+  description = "ARN da fila sqs-pagamento-solicitar (criada no oficina-pagamento-infras), usada para o gatilho SQS da Lambda."
   type        = string
 
   validation {
@@ -50,17 +50,23 @@ variable "solicitar_queue_arn" {
 }
 
 variable "efetuado_queue_url" {
-  description = "URL da fila sqs-pagamento-efetuado (criada no oficina-infra-pagamento), repassada como variavel de ambiente da Lambda."
+  description = "URL da fila sqs-pagamento-efetuado (criada no oficina-pagamento-infras), repassada como variavel de ambiente da Lambda."
   type        = string
 }
 
 variable "recusado_queue_url" {
-  description = "URL da fila sqs-pagamento-recusado (criada no oficina-infra-pagamento), repassada como variavel de ambiente da Lambda."
+  description = "URL da fila sqs-pagamento-recusado (criada no oficina-pagamento-infras), repassada como variavel de ambiente da Lambda."
   type        = string
 }
 
+variable "solicitar_dlq_queue_url" {
+  description = "URL da DLQ sqs-pagamento-solicitar-dlq (criada no oficina-pagamento-infras), repassada como variavel de ambiente da Lambda. Opcional: enquanto vazia, payloads invalidos (DomainValidationError) nao sao publicados em nenhuma DLQ, so logados."
+  type        = string
+  default     = ""
+}
+
 variable "orders_table_name" {
-  description = "Nome da tabela DynamoDB orders (criada no oficina-infra-pagamento), repassada como variavel de ambiente da Lambda."
+  description = "Nome da tabela DynamoDB orders (criada no oficina-pagamento-infras), repassada como variavel de ambiente da Lambda."
   type        = string
   default     = "orders"
 }

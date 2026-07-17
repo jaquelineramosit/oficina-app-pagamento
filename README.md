@@ -44,7 +44,8 @@ src/
 │   ├── ports/
 │   │   ├── payment_gateway_port.py         # Interface: criar/consultar order
 │   │   ├── order_repository_port.py        # Interface: persistir estado da order
-│   │   └── payment_status_notifier_port.py # Interface: publicar em efetuado/recusado
+│   │   ├── payment_status_notifier_port.py # Interface: publicar em efetuado/recusado
+│   │   └── dead_letter_publisher_port.py   # Interface: publicar payload inválido na DLQ
 │   └── use_cases/
 │       ├── create_payment_order.py     # Fluxo da fila SQS (efetuado/recusado)
 │       └── process_order_webhook.py    # Fluxo do webhook (confirmação de pago)
@@ -54,7 +55,8 @@ src/
     ├── adapters/
     │   ├── mercado_pago_gateway.py          # Implementa PaymentGatewayPort (requests)
     │   ├── dynamodb_order_repository.py     # Implementa OrderRepositoryPort (boto3)
-    │   └── sqs_payment_status_notifier.py   # Implementa PaymentStatusNotifierPort (boto3)
+    │   ├── sqs_payment_status_notifier.py   # Implementa PaymentStatusNotifierPort (boto3)
+    │   └── sqs_dead_letter_publisher.py     # Implementa DeadLetterPublisherPort (boto3)
     ├── security/
     │   └── webhook_signature.py         # Validação HMAC do header x-signature
     └── handlers/
@@ -88,7 +90,7 @@ src/
   qualquer credencial fake serve
 - Docker — só necessário para a Opção B de teste local (Lambda publicada
   de verdade no LocalStack, que usa o executor Docker dele)
-- Os recursos do [`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
+- Os recursos do [`oficina-pagamento-infras`](https://github.com/jaquelineramosit/oficina-pagamento-infras)
   já aplicados (filas SQS + tabela DynamoDB) — este repositório só cria a
   Lambda e referencia esses recursos, não os cria
 - Access Token de produção/teste da sua aplicação no Mercado Pago
@@ -105,6 +107,7 @@ src/
 | `ORDERS_TABLE_NAME`                | os dois gatilhos      | não (default `orders`) | Nome da tabela DynamoDB |
 | `SQS_PAGAMENTO_EFETUADO_QUEUE_URL` | os dois gatilhos      | ✅ (setado automaticamente pelo `terraform/`) | URL da fila `sqs-pagamento-efetuado` |
 | `SQS_PAGAMENTO_RECUSADO_QUEUE_URL` | gatilho SQS           | ✅ (setado automaticamente pelo `terraform/`) | URL da fila `sqs-pagamento-recusado` |
+| `SQS_PAGAMENTO_SOLICITAR_DLQ_URL`  | gatilho SQS           | recomendada | URL da DLQ `sqs-pagamento-solicitar-dlq`, usada para preservar payloads inválidos (`DomainValidationError`) |
 | `MP_HTTP_TIMEOUT_SECONDS`          | os dois gatilhos      | não (default `10`) | Timeout das chamadas HTTP ao Mercado Pago |
 | `AWS_ENDPOINT_URL`                 | os dois gatilhos      | não | Aponta o boto3 para o LocalStack em vez da AWS real (ver seção "Testando contra o LocalStack") |
 
@@ -151,7 +154,7 @@ Os testes cobrem:
   `lambda:CreateFunction`/`apigateway:*` pro usuário `voclabs`, mesmo com a
   Lambda usando a `LabRole` como execution role — é o mesmo tipo de
   bloqueio de permissão já visto no
-  [`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
+  [`oficina-pagamento-infras`](https://github.com/jaquelineramosit/oficina-pagamento-infras)
   pras filas SQS.
 
 ### Secrets e Variables necessários no GitHub (Settings → Secrets and variables → Actions)
@@ -160,22 +163,23 @@ Os testes cobrem:
 
 | Secret | Descrição |
 |--------|-----------|
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` | Credenciais AWS (mesmas do `oficina-infra-pagamento`) |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` | Credenciais AWS (mesmas do `oficina-pagamento-infras`) |
 | `AWS_REGION` | Região AWS |
 | `TF_STATE_BUCKET` | Bucket S3 do state Terraform (pode ser o mesmo do outro repo, com chave de state diferente) |
 | `MP_ACCESS_TOKEN` | Access Token do Mercado Pago |
 | `MP_WEBHOOK_SECRET` | Secret do webhook (pode ficar vazio) |
 
-**Variables** (copiadas manualmente dos outputs do `oficina-infra-pagamento`
-depois que os workflows de apply de lá rodarem — veja o README daquele
+**Variables** (copiadas manualmente dos outputs do `oficina-pagamento-infras`
+depois que o workflow de apply de lá rodar — veja o README daquele
 repositório):
 
 | Variable | De onde vem |
 |----------|-------------|
-| `SOLICITAR_QUEUE_ARN` | `terraform -chdir=terraform output` → fila `sqs-pagamento-solicitar`, `queue_arn` |
-| `EFETUADO_QUEUE_URL` | idem, fila `sqs-pagamento-efetuado`, `queue_url` |
-| `RECUSADO_QUEUE_URL` | idem, fila `sqs-pagamento-recusado`, `queue_url` |
-| `ORDERS_TABLE_NAME` | `terraform -chdir=terraform-dynamodb output` → `table_name` |
+| `SOLICITAR_QUEUE_ARN` | `terraform -chdir=terraform output` → `sqs_pagamento_solicitar_arn` |
+| `EFETUADO_QUEUE_URL` | idem, `sqs_pagamento_efetuado_url` |
+| `RECUSADO_QUEUE_URL` | idem, `sqs_pagamento_recusado_url` |
+| `SOLICITAR_DLQ_QUEUE_URL` | idem, fila `sqs-pagamento-solicitar-dlq` — **opcional por enquanto**: o `oficina-pagamento-infras` cria essa fila mas ainda não expõe um output para ela em `outputs.tf`; esta variable fica vazia até que esse output seja adicionado lá |
+| `ORDERS_TABLE_NAME` | idem, `dynamodb_table_name` |
 
 ## Build e deploy (Terraform)
 
@@ -185,9 +189,9 @@ terraform init
 terraform apply \
   -var="aws_region=us-east-1" \
   -var="mp_access_token=TEST-xxxxxxx" \
-  -var="solicitar_queue_arn=<output do oficina-infra-pagamento>" \
-  -var="efetuado_queue_url=<output do oficina-infra-pagamento>" \
-  -var="recusado_queue_url=<output do oficina-infra-pagamento>" \
+  -var="solicitar_queue_arn=<output do oficina-pagamento-infras>" \
+  -var="efetuado_queue_url=<output do oficina-pagamento-infras>" \
+  -var="recusado_queue_url=<output do oficina-pagamento-infras>" \
   -var="orders_table_name=orders"
 ```
 
@@ -226,7 +230,7 @@ curl -i -X POST <webhook_endpoint do terraform output> \
 
 ```bash
 aws sqs send-message \
-  --queue-url <SOLICITAR_QUEUE_URL do oficina-infra-pagamento> \
+  --queue-url <SOLICITAR_QUEUE_URL do oficina-pagamento-infras> \
   --message-body file://events/sample_payment_payload.json
 ```
 
@@ -314,22 +318,19 @@ antes de devolver uma), então o registro usa o `external_reference` como
 
 ## Testando contra o LocalStack
 
-Duas formas de testar de ponta a ponta (SQS + DynamoDB + esta Lambda) sem
-depender de uma conta AWS real, usando o ambiente local do
-[`oficina-infra-pagamento`](https://github.com/jaquelineramosit/oficina-infra-pagamento)
-(LocalStack via Docker). Em ambas, primeiro suba o LocalStack e crie as
-filas + tabela lá no outro repositório:
+> **Seção em revisão**: este repositório usava um `terraform-local/` para
+> publicar a Lambda de verdade no LocalStack (Opção B), mas esse diretório
+> foi removido e ainda não tem substituto documentado — o diretório
+> `resources_local/` que está tomando o lugar dele (scripts Python puros,
+> sem Terraform) ainda está em construção. Até essa migração terminar, use
+> a Opção A abaixo (invocar o código em processo) para testar contra o
+> LocalStack.
 
-```bash
-# no oficina-infra-pagamento
-docker compose up -d
-terraform -chdir=terraform-local apply
-```
+Suba o LocalStack e crie as filas + tabela usando o
+[`oficina-pagamento-infras`](https://github.com/jaquelineramosit/oficina-pagamento-infras)
+(consulte o README daquele repositório para o setup local mais atual).
 
-### Opção A — invocar em processo (mais rápido, sem publicar nada)
-
-Roda o código Python direto, sem passar pelo Terraform nem pelo executor
-Docker de Lambda do LocalStack. Bom para iterar rápido no código.
+### Invocar em processo (sem publicar nada, sem Terraform nem executor Docker de Lambda)
 
 1. Exporte as variáveis de ambiente apontando pro LocalStack (qualquer
    valor serve pras credenciais — o LocalStack não valida):
@@ -342,82 +343,21 @@ Docker de Lambda do LocalStack. Bom para iterar rápido no código.
    export ORDERS_TABLE_NAME=orders
    export SQS_PAGAMENTO_EFETUADO_QUEUE_URL=<output da fila efetuado>
    export SQS_PAGAMENTO_RECUSADO_QUEUE_URL=<output da fila recusado>
+   export SQS_PAGAMENTO_SOLICITAR_DLQ_URL=<output da DLQ solicitar, se já criado>
    export MP_ACCESS_TOKEN=TEST-xxxxxxx  # token de sandbox do Mercado Pago
    ```
 
    `AWS_ENDPOINT_URL` é reconhecida nativamente pelo boto3/botocore
    (>=1.29) — nenhum código precisa mudar para apontar para o LocalStack em
    vez da AWS real.
-2. Rode o dispatcher direto:
+2. Invoque o handler chamando `payment_handler.lambda_handler` diretamente
+   com um evento de exemplo (`events/sqs_event.json` ou
+   `events/webhook_event.json`) — o script anterior usado para isso
+   (`scripts/local_invoke.py`) foi removido nesta migração; use
+   `resources_local/` ou um script equivalente até a documentação dessa
+   parte ser atualizada.
 
-   ```bash
-   python scripts/local_invoke.py
-   # ou, pro evento de webhook:
-   python scripts/local_invoke.py events/webhook_event.json
-   ```
-
-   O script carrega o evento de exemplo (`events/sqs_event.json` por
-   padrão), chama `payment_handler.lambda_handler` e imprime o resultado.
-
-### Opção B — Lambda publicada de verdade no LocalStack
-
-Cria a Lambda como um recurso Lambda de verdade dentro do LocalStack
-(usando o executor Docker dele), com o gatilho SQS ativo — ou seja, uma
-mensagem publicada na fila `sqs-pagamento-solicitar` dispara a Lambda
-sozinha, sem você chamar nada manualmente. Mais fiel ao comportamento real
-na AWS, mais lento pra iterar (cada mudança no código exige reaplicar o
-Terraform pra reempacotar e republicar).
-
-1. `terraform-local/` deste repositório: mesmo empacotamento do `terraform/`
-   real (instala `requirements.txt` + `src/` num zip), mas aponta pro
-   LocalStack e busca as filas já criadas pelo `oficina-infra-pagamento`
-   por nome (`data "aws_sqs_queue"`) — não precisa copiar URL/ARN
-   manualmente como no deploy real.
-
-   ```bash
-   terraform -chdir=terraform-local init
-   terraform -chdir=terraform-local apply
-   ```
-
-2. Teste publicando uma mensagem na fila de entrada — a Lambda é disparada
-   automaticamente pelo LocalStack:
-
-   ```bash
-   aws --endpoint-url=http://localhost:4566 sqs send-message \
-     --queue-url http://localhost:4566/000000000000/sqs-pagamento-solicitar \
-     --message-body file://events/sample_payment_payload.json
-   ```
-
-   (crie `events/sample_payment_payload.json` com o payload puro, sem o
-   wrapper de evento SQS.)
-
-3. Ou invoque a Lambda diretamente (sem passar pela fila), simulando
-   qualquer um dos dois gatilhos:
-
-   ```bash
-   aws --endpoint-url=http://localhost:4566 lambda invoke \
-     --function-name oficina-pagamento \
-     --payload file://events/sqs_event.json \
-     --cli-binary-format raw-in-base64-out \
-     out.json && cat out.json
-   ```
-
-4. Acompanhe os logs da execução:
-
-   ```bash
-   aws --endpoint-url=http://localhost:4566 logs tail \
-     /aws/lambda/oficina-pagamento --follow
-   ```
-
-> A variável `AWS_ENDPOINT_URL` da Lambda, nesse caso, é setada pelo
-> próprio `terraform-local/main.tf` como `http://host.docker.internal:4566`
-> — é o endereço que o container onde a Lambda roda (criado pelo executor
-> Docker do LocalStack) usa pra alcançar o container do LocalStack de
-> volta. Isso funciona no Docker Desktop (Windows/Mac); em Docker nativo no
-> Linux pode ser necessário trocar para o hostname do container
-> `oficina-localstack` ou `172.17.0.1`, dependendo da rede Docker.
-
-Em qualquer uma das duas opções, confira o resultado:
+Confira o resultado:
 
 ```bash
 aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name orders
@@ -444,14 +384,21 @@ domínio de Pagamento.
   falhar por erro de infraestrutura, só ela retorna para a fila — as demais
   não são reprocessadas. Uma recusa do gateway (`PaymentGatewayError`) não
   entra nesse retry: é um resultado de negócio definitivo, tratado e
-  publicado em `sqs-pagamento-recusado` dentro do próprio use case.
-- **Payload inválido não é retentado**: um `DomainValidationError` (campo
-  obrigatório ausente, tipo errado etc.) nunca vai "se corrigir sozinho" com
-  um retry, então a mensagem é removida da fila e o erro fica só no
-  CloudWatch Logs. Se você quiser nunca perder esse tipo de mensagem para
-  auditoria, é fácil estender `sqs_handler.py` para publicar o payload
-  inválido em uma fila/tópico/bucket de "mensagens rejeitadas" antes de
-  descartar.
+  publicado em `sqs-pagamento-recusado` dentro do próprio use case. Se um
+  `PaymentGatewayError` escapar do use case por algum outro motivo (rede de
+  segurança para bugs, já que no fluxo normal ele nunca chega ao handler), o
+  handler trata da mesma forma — via
+  `CreatePaymentOrderUseCase.handle_gateway_error_as_recusado` — em vez de
+  reprocessar indefinidamente; só entra em retry se essa própria tentativa de
+  registrar a recusa falhar (erro de infra).
+- **Payload inválido vai para a DLQ, não é retentado**: um
+  `DomainValidationError` (campo obrigatório ausente, tipo errado etc.) nunca
+  vai "se corrigir sozinho" com um retry, então a mensagem é removida da fila
+  `sqs-pagamento-solicitar` sem reprocessamento — mas, em vez de descartar o
+  payload, o `sqs_handler.py` publica o corpo original + o motivo do erro
+  diretamente na DLQ (`SQS_PAGAMENTO_SOLICITAR_DLQ_URL`) para investigação
+  manual. Se a própria publicação na DLQ falhar, a mensagem é marcada para
+  retry (para não perdê-la de vez).
 - **Resposta rápida ao Mercado Pago (webhook)**: a documentação exige resposta
   em até ~22s. O fluxo atual (`get_order` + `update_item` no DynamoDB) é
   rápido o bastante na prática, mas se no futuro o processamento pós-webhook
