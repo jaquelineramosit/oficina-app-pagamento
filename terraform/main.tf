@@ -59,6 +59,7 @@ resource "aws_lambda_function" "pagamento" {
       ORDERS_TABLE_NAME                = var.orders_table_name
       SQS_PAGAMENTO_EFETUADO_QUEUE_URL = var.efetuado_queue_url
       SQS_PAGAMENTO_RECUSADO_QUEUE_URL = var.recusado_queue_url
+      SQS_PAGAMENTO_SOLICITAR_DLQ_URL  = var.solicitar_dlq_queue_url
     }
   }
 
@@ -66,7 +67,7 @@ resource "aws_lambda_function" "pagamento" {
 }
 
 # ---------------------------------------------------------------------
-# Gatilho 1: fila sqs-pagamento-solicitar (criada no oficina-infra-pagamento)
+# Gatilho 1: fila sqs-pagamento-solicitar (criada no oficina-pagamento-infras)
 # ---------------------------------------------------------------------
 resource "aws_lambda_event_source_mapping" "solicitar" {
   event_source_arn = var.solicitar_queue_arn

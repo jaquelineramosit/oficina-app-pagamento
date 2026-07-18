@@ -5,6 +5,7 @@ from src.application.use_cases.create_payment_order import CreatePaymentOrderUse
 from src.domain.exceptions import DomainValidationError, PaymentGatewayError
 from src.infrastructure.adapters.dynamodb_order_repository import DynamoDBOrderRepository
 from src.infrastructure.adapters.mercado_pago_gateway import MercadoPagoGateway
+from src.infrastructure.adapters.sqs_dead_letter_publisher import SQSDeadLetterPublisher
 from src.infrastructure.adapters.sqs_payment_status_notifier import SQSPaymentStatusNotifier
 from src.infrastructure.config import settings
 
@@ -16,6 +17,7 @@ logger.setLevel(logging.INFO)
 _payment_gateway = MercadoPagoGateway()
 _order_repository = DynamoDBOrderRepository()
 _payment_status_notifier = SQSPaymentStatusNotifier()
+_dead_letter_publisher = SQSDeadLetterPublisher()
 _use_case = CreatePaymentOrderUseCase(_payment_gateway, _order_repository, _payment_status_notifier)
 
 
@@ -52,21 +54,46 @@ def lambda_handler(event, context):
         except DomainValidationError as exc:
             # Payload inválido (campo obrigatório ausente, tipo errado etc.).
             # Reprocessar não vai resolver, então NÃO marcamos como falha —
-            # a mensagem é removida da fila. Fica registrado no CloudWatch
-            # Logs para investigação; se preferir nunca perder a mensagem,
-            # considere publicá-la também em uma fila/S3 de "mensagens
-            # inválidas" antes de descartar.
+            # a mensagem é removida da fila 'sqs-pagamento-solicitar'. Para
+            # não perdê-la de vez, publicamos o payload original + o motivo
+            # do erro diretamente na DLQ dessa fila, para investigação manual.
             logger.error("Payload inválido | messageId=%s | erro=%s", message_id, exc)
+            try:
+                _dead_letter_publisher.publish(message_id, record["body"], str(exc))
+            except Exception:
+                # Se nem a publicação na DLQ funcionar, é melhor reprocessar
+                # (retry) do que perder a mensagem por completo.
+                logger.exception(
+                    "Falha ao publicar payload inválido na DLQ | messageId=%s", message_id
+                )
+                batch_item_failures.append({"itemIdentifier": message_id})
 
         except PaymentGatewayError as exc:
             # Rede de segurança: no fluxo normal o use case já captura
-            # PaymentGatewayError internamente (vira outcome "recusado").
-            # Se mesmo assim uma escapar (bug, uso direto do use case sem
-            # esse tratamento, etc.), tratamos como falha de lote.
+            # PaymentGatewayError internamente (vira outcome "recusado",
+            # persistido e publicado em 'sqs-pagamento-recusado'). Se mesmo
+            # assim uma escapar (bug, uso direto do use case sem esse
+            # tratamento, etc.), tratamos da mesma forma — resultado de
+            # negócio definitivo — em vez de reprocessar indefinidamente.
             logger.error(
-                "Erro no gateway de pagamento | messageId=%s | erro=%s", message_id, exc
+                "Erro no gateway de pagamento (fora do fluxo normal) | messageId=%s | erro=%s",
+                message_id,
+                exc,
             )
-            batch_item_failures.append({"itemIdentifier": message_id})
+            try:
+                result = _use_case.handle_gateway_error_as_recusado(body, exc)
+                logger.info(
+                    "Recusa registrada a partir de erro inesperado de gateway | "
+                    "messageId=%s | resultado=%s",
+                    message_id,
+                    result,
+                )
+            except Exception:
+                logger.exception(
+                    "Falha ao registrar recusa para erro inesperado de gateway | messageId=%s",
+                    message_id,
+                )
+                batch_item_failures.append({"itemIdentifier": message_id})
 
         except Exception:  # noqa: BLE001
             logger.exception("Erro inesperado ao processar mensagem | messageId=%s", message_id)

@@ -38,13 +38,9 @@ jobs:
     name: Validar Terraform
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        working-directory: [ terraform, terraform-local ]
-
     defaults:
       run:
-        working-directory: ${{ matrix.working-directory }}
+        working-directory: terraform
 
     steps:
       - name: Checkout
