@@ -33,6 +33,7 @@ certa conforme o formato do evento recebido — ver `Arquitetura` abaixo.
 
 ## Arquitetura (Hexagonal / Ports & Adapters)
 
+
 ```
 src/
 ├── domain/                        # Núcleo — regras de negócio puras, sem AWS/HTTP
