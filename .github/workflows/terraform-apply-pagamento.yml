@@ -36,10 +36,10 @@ jobs:
       MP_WEBHOOK_SECRET: ${{ secrets['MP_WEBHOOK_SECRET'] }}
       ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'oficina' }}
-      SOLICITAR_QUEUE_ARN: ${{ vars.SOLICITAR_QUEUE_ARN }}
-      EFETUADO_QUEUE_URL: ${{ vars.EFETUADO_QUEUE_URL }}
-      RECUSADO_QUEUE_URL: ${{ vars.RECUSADO_QUEUE_URL }}
-      SOLICITAR_DLQ_QUEUE_URL: ${{ vars.SOLICITAR_DLQ_QUEUE_URL }}
+      SOLICITAR_QUEUE_ARN: ${{ secrets['SOLICITAR_QUEUE_ARN'] }}
+      EFETUADO_QUEUE_URL: ${{ secrets['EFETUADO_QUEUE_URL'] }}
+      RECUSADO_QUEUE_URL: ${{ secrets['RECUSADO_QUEUE_URL'] }}
+      SOLICITAR_DLQ_QUEUE_URL: ${{ secrets['SOLICITAR_DLQ_QUEUE_URL'] }}
       ORDERS_TABLE_NAME: ${{ vars.ORDERS_TABLE_NAME || 'orders' }}
 
     steps:
