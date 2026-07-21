@@ -39,7 +39,7 @@ jobs:
       SOLICITAR_QUEUE_ARN: ${{ secrets['SOLICITAR_QUEUE_ARN'] }}
       EFETUADO_QUEUE_URL: ${{ secrets['EFETUADO_QUEUE_URL'] }}
       RECUSADO_QUEUE_URL: ${{ secrets['RECUSADO_QUEUE_URL'] }}
-      SOLICITAR_DLQ_QUEUE_URL: ${{ secrets['SOLICITAR_DLQ_QUEUE_URL'] }}
+      SOLICITAR_DLQ_QUEUE_URL: ${{ secrets['SQS_PAGAMENTO_SOLICITAR_DLQ_URL'] }}
       ORDERS_TABLE_NAME: ${{ vars.ORDERS_TABLE_NAME || 'orders' }}
 
     steps:
