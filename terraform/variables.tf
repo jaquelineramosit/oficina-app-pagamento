@@ -23,7 +23,7 @@ variable "environment" {
 variable "lab_role_arn" {
   description = "ARN da LabRole provisionada pela AWS Academy, usada como execution role da Lambda (a Academy nao permite criar roles IAM novas)."
   type        = string
-  default     = "arn:aws:iam::539963454755:role/LabRole"
+  default     = "arn:aws:iam::550039263173:role/LabRole"
 }
 
 variable "mp_access_token" {
