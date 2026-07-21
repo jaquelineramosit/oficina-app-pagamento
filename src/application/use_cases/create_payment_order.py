@@ -77,6 +77,13 @@ class CreatePaymentOrderUseCase:
         #    solicitado, incluindo o QR Code para quem for exibi-lo ao pagador.
         self._payment_status_notifier.notify(order, PaymentStatus.EFETUADO)
 
+        logger.info(
+            "Notificação enviada com sucesso | order_id=%s | status=%s/%s",
+            order.id,
+            order.status,
+            order.status_detail,
+        )
+
         return {
             "outcome": "efetuado",
             "order_id": order.id,
