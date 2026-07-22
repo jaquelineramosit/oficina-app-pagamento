@@ -32,11 +32,10 @@ variable "mp_access_token" {
   sensitive   = true
 }
 
-variable "mp_webhook_secret" {
-  description = "Chave secreta do webhook do Mercado Pago, usada para validar o header x-signature. Vazio pula a validacao (nao recomendado em producao)."
+variable "poll_schedule_expression" {
+  description = "Expressao de agendamento (rate/cron) do EventBridge que aciona o polling de status das orders pendentes na Orders API do Mercado Pago."
   type        = string
-  default     = ""
-  sensitive   = true
+  default     = "rate(1 minute)"
 }
 
 variable "solicitar_queue_arn" {

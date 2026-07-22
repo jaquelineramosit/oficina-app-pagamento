@@ -16,9 +16,8 @@ resource "aws_lambda_function" "pagamento" {
 
     variables = {
 
-      MP_ACCESS_TOKEN   = var.mp_access_token
-      MP_WEBHOOK_SECRET = var.mp_webhook_secret
-      MP_API_BASE_URL   = var.mp_api_base_url
+      MP_ACCESS_TOKEN = var.mp_access_token
+      MP_API_BASE_URL = var.mp_api_base_url
 
       ORDERS_TABLE_NAME = var.orders_table_name
 
