@@ -3,7 +3,7 @@
     {
       "messageId": "1",
       "receiptHandle": "abc",
-      "body": "{\"orderId\":\"12345678\",\"valor\":555555}",
+      "body": "{\"external_reference\":\"12345678\",\"total_amount\":\"10.00\",\"description\":\"Order Pix - teste\",\"payer\":{\"email\":\"test@testuser.com\"},\"transactions\":{\"payments\":[{\"amount\":\"10.00\",\"payment_method\":{\"type\":\"bank_transfer\",\"id\":\"pix\"}}]}}",
       "attributes": {},
       "messageAttributes": {},
       "md5OfBody": "",

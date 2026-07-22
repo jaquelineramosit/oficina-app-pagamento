@@ -33,7 +33,6 @@ jobs:
       AWS_REGION: ${{ secrets['AWS_REGION'] }}
       TF_STATE_BUCKET: ${{ secrets['TF_STATE_BUCKET'] }}
       MP_ACCESS_TOKEN: ${{ secrets['MP_ACCESS_TOKEN'] }}
-      MP_WEBHOOK_SECRET: ${{ secrets['MP_WEBHOOK_SECRET'] }}
       ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'oficina' }}
       SOLICITAR_QUEUE_ARN: ${{ secrets['SOLICITAR_QUEUE_ARN'] }}
@@ -87,7 +86,6 @@ jobs:
             printf 'TF_VAR_project_name=%s\n' "${PROJECT_NAME}"
             printf 'TF_VAR_environment=%s\n' "${ENVIRONMENT}"
             printf 'TF_VAR_mp_access_token=%s\n' "${MP_ACCESS_TOKEN}"
-            printf 'TF_VAR_mp_webhook_secret=%s\n' "${MP_WEBHOOK_SECRET}"
             printf 'TF_VAR_solicitar_queue_arn=%s\n' "${SOLICITAR_QUEUE_ARN}"
             printf 'TF_VAR_efetuado_queue_url=%s\n' "${EFETUADO_QUEUE_URL}"
             printf 'TF_VAR_recusado_queue_url=%s\n' "${RECUSADO_QUEUE_URL}"

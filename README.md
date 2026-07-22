@@ -181,6 +181,8 @@ repositório):
 | `RECUSADO_QUEUE_URL` | idem, `sqs_pagamento_recusado_url` |
 | `SOLICITAR_DLQ_QUEUE_URL` | idem, fila `sqs-pagamento-solicitar-dlq` — **opcional por enquanto**: o `oficina-pagamento-infras` cria essa fila mas ainda não expõe um output para ela em `outputs.tf`; esta variable fica vazia até que esse output seja adicionado lá |
 | `ORDERS_TABLE_NAME` | idem, `dynamodb_table_name` |
+| `ENVIRONMENT` | Opcional (default `dev`) — usada na chave do state Terraform (`oficina-app-pagamento/${ENVIRONMENT}/pagamento/terraform.tfstate`) |
+| `PROJECT_NAME` | Opcional (default `oficina`) — repassada como `TF_VAR_project_name` |
 
 ## Build e deploy (Terraform)
 
@@ -319,19 +321,25 @@ antes de devolver uma), então o registro usa o `external_reference` como
 
 ## Testando contra o LocalStack
 
-> **Seção em revisão**: este repositório usava um `terraform-local/` para
-> publicar a Lambda de verdade no LocalStack (Opção B), mas esse diretório
-> foi removido e ainda não tem substituto documentado — o diretório
-> `resources_local/` que está tomando o lugar dele (scripts Python puros,
-> sem Terraform) ainda está em construção. Até essa migração terminar, use
-> a Opção A abaixo (invocar o código em processo) para testar contra o
-> LocalStack.
-
 Suba o LocalStack e crie as filas + tabela usando o
 [`oficina-pagamento-infras`](https://github.com/jaquelineramosit/oficina-pagamento-infras)
 (consulte o README daquele repositório para o setup local mais atual).
 
-### Invocar em processo (sem publicar nada, sem Terraform nem executor Docker de Lambda)
+O antigo `terraform-local/` (que publicava a Lambda de verdade no executor
+Docker do LocalStack) foi removido. No lugar dele, use uma das opções
+abaixo — nenhuma exige Terraform ou o executor Docker de Lambda.
+
+### Opção A — runner do `resources_local/` (recomendada)
+
+O pacote [`resources_local/`](resources_local/README.md) dá long-polling na
+fila `sqs-pagamento-solicitar` do LocalStack e chama
+`payment_handler.lambda_handler` (o handler real) diretamente em processo a
+cada mensagem recebida — mais próximo do comportamento de produção do que
+uma invocação avulsa. Veja o [README daquele diretório](resources_local/README.md)
+para configuração e uso (`python -m resources_local.local_runner` +
+`python -m resources_local.send_message`).
+
+### Opção B — invocação avulsa em processo
 
 1. Exporte as variáveis de ambiente apontando pro LocalStack (qualquer
    valor serve pras credenciais — o LocalStack não valida):
@@ -351,14 +359,11 @@ Suba o LocalStack e crie as filas + tabela usando o
    `AWS_ENDPOINT_URL` é reconhecida nativamente pelo boto3/botocore
    (>=1.29) — nenhum código precisa mudar para apontar para o LocalStack em
    vez da AWS real.
-2. Invoque o handler chamando `payment_handler.lambda_handler` diretamente
-   com um evento de exemplo (`events/sqs_event.json` ou
-   `events/webhook_event.json`) — o script anterior usado para isso
-   (`scripts/local_invoke.py`) foi removido nesta migração; use
-   `resources_local/` ou um script equivalente até a documentação dessa
-   parte ser atualizada.
+2. Invoque `payment_handler.lambda_handler` diretamente num shell Python,
+   passando um evento de exemplo (ex. `resources_local/sample_event.json`)
+   como primeiro argumento e `None` como contexto.
 
-Confira o resultado:
+Confira o resultado (em qualquer uma das opções):
 
 ```bash
 aws --endpoint-url=http://localhost:4566 dynamodb scan --table-name orders

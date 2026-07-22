@@ -1,4 +1,4 @@
-from aws_clients import get_dynamodb, get_sqs
+from .aws_clients import get_dynamodb, get_sqs
 
 print("=== SQS ===")
 
