@@ -14,6 +14,14 @@ from typing import List, Optional
 from src.domain.exceptions import DomainValidationError
 
 
+# Defaults aplicados quando a mensagem de entrada não informa "type"/
+# "processing_mode" — únicos valores usados nos fluxos de Pix via Orders
+# API que este projeto integra, então não faz sentido exigi-los na
+# entrada quando o autor da mensagem sempre quer o mesmo valor.
+_DEFAULT_ORDER_TYPE = "online"
+_DEFAULT_PROCESSING_MODE = "automatic"
+
+
 def _to_decimal(value, field_name: str) -> Decimal:
     try:
         return Decimal(str(value))
@@ -87,7 +95,8 @@ class PaymentRequest:
 class OrderRequest:
     """
     Payload de entrada já validado, pronto para ser enviado à API de Orders
-    do Mercado Pago. Todos os campos são obrigatórios, conforme requisito.
+    do Mercado Pago. Todos os campos são obrigatórios, exceto "type" e
+    "processing_mode" — quando omitidos, assumem "online"/"automatic".
     """
     type: str
     processing_mode: str
@@ -103,8 +112,6 @@ class OrderRequest:
             raise DomainValidationError("Payload da mensagem deve ser um objeto JSON.")
 
         required_top_level = [
-            "type",
-            "processing_mode",
             "external_reference",
             "total_amount",
             "description",
@@ -136,8 +143,8 @@ class OrderRequest:
         payments = [PaymentRequest.from_dict(p) for p in payments_raw]
 
         return OrderRequest(
-            type=data["type"],
-            processing_mode=data["processing_mode"],
+            type=data.get("type") or _DEFAULT_ORDER_TYPE,
+            processing_mode=data.get("processing_mode") or _DEFAULT_PROCESSING_MODE,
             external_reference=data["external_reference"],
             total_amount=_to_decimal(data["total_amount"], "total_amount"),
             description=data["description"],

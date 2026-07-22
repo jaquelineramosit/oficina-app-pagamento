@@ -32,13 +32,29 @@ def test_valid_payload_builds_order_request():
 
 @pytest.mark.parametrize(
     "missing_field",
-    ["type", "processing_mode", "external_reference", "total_amount", "description", "payer", "transactions"],
+    ["external_reference", "total_amount", "description", "payer", "transactions"],
 )
 def test_missing_required_field_raises(missing_field):
     payload = {k: v for k, v in VALID_PAYLOAD.items() if k != missing_field}
 
     with pytest.raises(DomainValidationError):
         OrderRequest.from_dict(payload)
+
+
+def test_missing_type_defaults_to_online():
+    payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "type"}
+
+    order_request = OrderRequest.from_dict(payload)
+
+    assert order_request.type == "online"
+
+
+def test_missing_processing_mode_defaults_to_automatic():
+    payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "processing_mode"}
+
+    order_request = OrderRequest.from_dict(payload)
+
+    assert order_request.processing_mode == "automatic"
 
 
 def test_missing_payer_email_raises():
