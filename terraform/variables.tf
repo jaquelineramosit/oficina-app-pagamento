@@ -44,6 +44,12 @@ variable "order_expiration_minutes" {
   default     = 10
 }
 
+variable "poll_enabled" {
+  description = "Feature flag para ligar/desligar manualmente a regra do EventBridge que aciona o polling (false = regra fica DISABLED, a lambda para de ser invocada pelo schedule)."
+  type        = bool
+  default     = true
+}
+
 variable "solicitar_queue_arn" {
   description = "ARN da fila sqs-pagamento-solicitar (criada no oficina-pagamento-infras), usada para o gatilho SQS da Lambda."
   type        = string

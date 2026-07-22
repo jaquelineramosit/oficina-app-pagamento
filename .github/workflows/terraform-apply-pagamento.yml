@@ -35,6 +35,7 @@ jobs:
       MP_ACCESS_TOKEN: ${{ secrets['MP_ACCESS_TOKEN'] }}
       ENVIRONMENT: ${{ vars.ENVIRONMENT || 'dev' }}
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'oficina' }}
+      POLL_ENABLED: ${{ vars.POLL_ENABLED || 'true' }}
       SOLICITAR_QUEUE_ARN: ${{ secrets['SOLICITAR_QUEUE_ARN'] }}
       EFETUADO_QUEUE_URL: ${{ secrets['EFETUADO_QUEUE_URL'] }}
       RECUSADO_QUEUE_URL: ${{ secrets['RECUSADO_QUEUE_URL'] }}
@@ -86,6 +87,7 @@ jobs:
             printf 'TF_VAR_project_name=%s\n' "${PROJECT_NAME}"
             printf 'TF_VAR_environment=%s\n' "${ENVIRONMENT}"
             printf 'TF_VAR_mp_access_token=%s\n' "${MP_ACCESS_TOKEN}"
+            printf 'TF_VAR_poll_enabled=%s\n' "${POLL_ENABLED}"
             printf 'TF_VAR_solicitar_queue_arn=%s\n' "${SOLICITAR_QUEUE_ARN}"
             printf 'TF_VAR_efetuado_queue_url=%s\n' "${EFETUADO_QUEUE_URL}"
             printf 'TF_VAR_recusado_queue_url=%s\n' "${RECUSADO_QUEUE_URL}"
