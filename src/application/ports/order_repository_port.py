@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import List, Optional
 
 from src.domain.entities import Order
 
@@ -18,10 +18,16 @@ class OrderRepositoryPort(ABC):
 
     @abstractmethod
     def update_order_status(self, order: Order) -> None:
-        """Atualiza o status de uma order já existente (chamado pelo webhook)."""
+        """Atualiza o status de uma order já existente (chamado pelo polling)."""
         raise NotImplementedError
 
     @abstractmethod
     def find_by_id(self, order_id: str) -> Optional[Order]:
         """Busca uma order pelo id, caso já esteja persistida."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_pending_orders(self) -> List[Order]:
+        """Lista as orders com status 'efetuado' (aguardando confirmação de
+        pagamento), candidatas a serem verificadas pelo polling."""
         raise NotImplementedError

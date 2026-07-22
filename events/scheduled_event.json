@@ -1,0 +1,9 @@
+{
+  "source": "aws.events",
+  "detail-type": "Scheduled Event",
+  "region": "us-east-1",
+  "resources": [
+    "arn:aws:events:us-east-1:123456789012:rule/oficina-pagamento-poll-status"
+  ],
+  "detail": {}
+}

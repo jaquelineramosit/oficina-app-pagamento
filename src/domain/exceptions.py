@@ -23,7 +23,3 @@ class PaymentGatewayError(Exception):
 
 class OrderNotFoundError(Exception):
     """Order não encontrada (nem no Mercado Pago, nem no repositório local)."""
-
-
-class WebhookSignatureError(Exception):
-    """Assinatura do webhook inválida — possível tentativa de falsificação."""

@@ -9,11 +9,12 @@ acompanham pagamentos Pix usando a **Orders API** do Mercado Pago:
    **`efetuado`**); se o gateway recusar/falhar, publica em
    `sqs-pagamento-recusado` (status **`recusado`**) — em ambos os casos o
    resultado é persistido no DynamoDB antes da publicação.
-2. **Gatilho API Gateway (webhook)** — recebe as notificações do Mercado
-   Pago no tópico `order`, confirma em até 200/201, busca o recurso completo
-   (`GET /v1/orders/{id}`), atualiza o status do pedido e, quando o
-   pagamento é confirmado, publica novamente em `sqs-pagamento-efetuado`
-   (status **`pago`**).
+2. **Gatilho EventBridge (polling)** — acionado periodicamente (rate
+   configurável), busca no DynamoDB as orders com status `efetuado` ainda
+   pendentes de confirmação e, para cada uma, consulta o Mercado Pago
+   (`GET /v1/orders/{id}`) para saber se o Pix já foi processado. Quando o
+   `status` retornado é `processed`, atualiza o status do pedido e publica
+   novamente em `sqs-pagamento-efetuado` (status **`pago`**).
 
 O mesmo `lambda_handler` (`payment_handler.py`) despacha para a lógica
 certa conforme o formato do evento recebido — ver `Arquitetura` abaixo.
@@ -23,8 +24,9 @@ certa conforme o formato do evento recebido — ver `Arquitetura` abaixo.
    sqs-pagamento-solicitar│                        │──────▶ │ Mercado Pago API  │
  ─────────────────────▶  │    oficina-pagamento     │        └─────────┬─────────┘
                           │   (payment_handler.py)   │                  │
-                          │  gatilho 1: fila SQS      │                  │ webhook (order)
-                          │  gatilho 2: API Gateway   │ ◀────────────────┘
+                          │  gatilho 1: fila SQS      │                  │ GET /v1/orders/{id}
+                          │  gatilho 2: EventBridge   │ ────polling──────┘
+                          │  (polling agendado)       │
                           └────────────┬─────────────┘
                      sucesso/pago      │      falha no gateway
                           ▼            ▼
@@ -49,7 +51,7 @@ src/
 │   │   └── dead_letter_publisher_port.py   # Interface: publicar payload inválido na DLQ
 │   └── use_cases/
 │       ├── create_payment_order.py     # Fluxo da fila SQS (efetuado/recusado)
-│       └── process_order_webhook.py    # Fluxo do webhook (confirmação de pago)
+│       └── check_payment_status.py     # Fluxo do polling (confirmação de pago)
 │
 └── infrastructure/                # Adapters — implementações concretas
     ├── config.py                       # Leitura de variáveis de ambiente
@@ -58,12 +60,10 @@ src/
     │   ├── dynamodb_order_repository.py     # Implementa OrderRepositoryPort (boto3)
     │   ├── sqs_payment_status_notifier.py   # Implementa PaymentStatusNotifierPort (boto3)
     │   └── sqs_dead_letter_publisher.py     # Implementa DeadLetterPublisherPort (boto3)
-    ├── security/
-    │   └── webhook_signature.py         # Validação HMAC do header x-signature
     └── handlers/
         ├── payment_handler.py           # Entry point ÚNICO da Lambda oficina-pagamento (dispatcher)
         ├── sqs_handler.py               # Lógica do gatilho SQS (chamada pelo dispatcher)
-        └── webhook_handler.py           # Lógica do gatilho webhook (chamada pelo dispatcher)
+        └── polling_handler.py           # Lógica do gatilho de polling (chamada pelo dispatcher)
 ```
 
 **Por que essa separação importa na prática:**
@@ -76,7 +76,7 @@ src/
   persistir no DynamoDB ou publicar no SQS. Trocar de banco (ex. Postgres),
   de gateway de pagamento, ou até de mecanismo de notificação (ex. SNS em vez
   de SQS) não exige tocar em `domain/` nem `application/`.
-- `sqs_handler.py`/`webhook_handler.py` continuam sendo dois módulos com uma
+- `sqs_handler.py`/`polling_handler.py` continuam sendo dois módulos com uma
   função `lambda_handler` cada — só que agora nenhum dos dois é referenciado
   diretamente pela infra (`terraform/`); quem é chamado pela AWS é sempre
   `payment_handler.lambda_handler`, que despacha para um dos dois conforme o
@@ -96,26 +96,25 @@ src/
   Lambda e referencia esses recursos, não os cria
 - Access Token de produção/teste da sua aplicação no Mercado Pago
   (`APP_USR-...` ou `TEST-...`)
-- A chave secreta do webhook (painel **Webhooks** da aplicação no Mercado Pago)
 
 ## Variáveis de ambiente
 
 | Variável                          | Usada por           | Obrigatória | Descrição |
 |------------------------------------|----------------------|:-----------:|-----------|
 | `MP_ACCESS_TOKEN`                  | os dois gatilhos      | ✅ | Bearer token da API do Mercado Pago |
-| `MP_WEBHOOK_SECRET`                | gatilho webhook       | recomendada | Secret para validar o header `x-signature` |
 | `MP_API_BASE_URL`                  | os dois gatilhos      | não (default `https://api.mercadopago.com`) | Útil para apontar a um mock em testes |
 | `ORDERS_TABLE_NAME`                | os dois gatilhos      | não (default `orders`) | Nome da tabela DynamoDB |
 | `SQS_PAGAMENTO_EFETUADO_QUEUE_URL` | os dois gatilhos      | ✅ (setado automaticamente pelo `terraform/`) | URL da fila `sqs-pagamento-efetuado` |
 | `SQS_PAGAMENTO_RECUSADO_QUEUE_URL` | gatilho SQS           | ✅ (setado automaticamente pelo `terraform/`) | URL da fila `sqs-pagamento-recusado` |
 | `SQS_PAGAMENTO_SOLICITAR_DLQ_URL`  | gatilho SQS           | recomendada | URL da DLQ `sqs-pagamento-solicitar-dlq`, usada para preservar payloads inválidos (`DomainValidationError`) |
 | `MP_HTTP_TIMEOUT_SECONDS`          | os dois gatilhos      | não (default `10`) | Timeout das chamadas HTTP ao Mercado Pago |
+| `ORDER_EXPIRATION_MINUTES`         | gatilho de polling    | não (default `10`) | Minutos após a criação da order sem confirmação de pagamento até ela ser marcada como `recusado` e parar de ser verificada pelo polling |
 | `AWS_ENDPOINT_URL`                 | os dois gatilhos      | não | Aponta o boto3 para o LocalStack em vez da AWS real (ver seção "Testando contra o LocalStack") |
 
-> Em produção, prefira buscar `MP_ACCESS_TOKEN` e `MP_WEBHOOK_SECRET` do
-> **AWS Secrets Manager** ou **SSM Parameter Store** em vez de variáveis de
-> ambiente em texto plano. No `terraform/`, esses dois valores já são
-> `variable`s `sensitive = true` para facilitar essa migração depois.
+> Em produção, prefira buscar `MP_ACCESS_TOKEN` do **AWS Secrets Manager**
+> ou **SSM Parameter Store** em vez de variável de ambiente em texto plano.
+> No `terraform/`, esse valor já é uma `variable` `sensitive = true` para
+> facilitar essa migração depois.
 
 ## Instalação para desenvolvimento local
 
@@ -135,10 +134,14 @@ Os testes cobrem:
 - Validação de todos os campos obrigatórios do payload (`test_entities.py`)
 - O caso de uso de criação de order, com o gateway/repositório mockados
   (`test_create_payment_order.py`)
-- O caso de uso de processamento do webhook (`test_process_order_webhook.py`)
-- A validação de assinatura HMAC (`test_webhook_signature.py`)
+- O caso de uso de verificação de status via polling, incluindo a
+  expiração de orders pendentes (`test_check_payment_status.py`)
+- O filtro de orders pendentes do `DynamoDBOrderRepository`, contra uma
+  tabela DynamoDB simulada com `moto` (`test_dynamodb_order_repository.py`)
 - Os dois `lambda_handler` de ponta a ponta, com dependências externas
-  mockadas (`test_sqs_handler.py`, `test_webhook_handler.py`)
+  mockadas (`test_sqs_handler.py`, `test_polling_handler.py`)
+- O dispatcher que decide qual dos dois handlers chamar
+  (`test_payment_handler.py`)
 
 ## CI/CD (GitHub Actions)
 
@@ -148,11 +151,12 @@ Os testes cobrem:
   `terraform validate` dentro de `terraform/`. Não precisa de credenciais
   AWS.
 - **`.github/workflows/terraform-apply-pagamento.yml`** — dispara no push
-  pra `main` (ou seja, no merge do PR): `terraform init`/`plan`/`apply` de
-  verdade, criando/atualizando a Lambda, o gatilho SQS e o endpoint de
-  webhook. Depende de Secrets/Variables configurados no repositório (veja
+  pra `main` (ou seja, no merge do PR): empacota a Lambda (`Build Lambda
+  package`) e roda `terraform init`/`plan`/`apply` de verdade, criando/
+  atualizando a Lambda, o gatilho SQS e a regra do EventBridge que aciona o
+  polling. Depende de Secrets/Variables configurados no repositório (veja
   abaixo) e do resultado ainda é incerto: a AWS Academy pode não liberar
-  `lambda:CreateFunction`/`apigateway:*` pro usuário `voclabs`, mesmo com a
+  `lambda:CreateFunction`/`events:*` pro usuário `voclabs`, mesmo com a
   Lambda usando a `LabRole` como execution role — é o mesmo tipo de
   bloqueio de permissão já visto no
   [`oficina-pagamento-infras`](https://github.com/jaquelineramosit/oficina-pagamento-infras)
@@ -168,7 +172,6 @@ Os testes cobrem:
 | `AWS_REGION` | Região AWS |
 | `TF_STATE_BUCKET` | Bucket S3 do state Terraform (pode ser o mesmo do outro repo, com chave de state diferente) |
 | `MP_ACCESS_TOKEN` | Access Token do Mercado Pago |
-| `MP_WEBHOOK_SECRET` | Secret do webhook (pode ficar vazio) |
 
 **Variables** (copiadas manualmente dos outputs do `oficina-pagamento-infras`
 depois que o workflow de apply de lá rodar — veja o README daquele
@@ -186,6 +189,18 @@ repositório):
 
 ## Build e deploy (Terraform)
 
+Você precisa empacotar a Lambda antes do `terraform apply` (o
+`.github/workflows/terraform-apply-pagamento.yml` faz isso automaticamente
+no step `Build Lambda package`; localmente, replique o mesmo processo):
+
+```bash
+rm -rf terraform/build terraform/lambda.zip
+mkdir terraform/build
+pip install -r requirements.txt -t terraform/build --quiet
+cp -R src terraform/build/
+(cd terraform/build && zip -qr ../lambda.zip .)
+```
+
 ```bash
 cd terraform
 terraform init
@@ -198,36 +213,15 @@ terraform apply \
   -var="orders_table_name=orders"
 ```
 
-`terraform/main.tf` empacota a Lambda sozinho (instala `requirements.txt`
-em `build/`, copia `src/` e zipa — sem precisar do SAM CLI) e usa a
-`LabRole` da AWS Academy diretamente como execution role (`role =
-var.lab_role_arn`), então não tenta criar nenhuma IAM role nova.
-
-Ao final, `terraform output` mostra a URL do endpoint de webhook gerado
-pelo API Gateway (formato
-`https://{api-id}.execute-api.{region}.amazonaws.com/api/webhooks/mercadopago`
-— API Gateway HTTP API, sem prefixo de stage tipo `/Prod`).
-
-### Apontando seu domínio customizado para o webhook
-
-Para usar um domínio próprio em vez da URL gerada pelo API Gateway:
-
-1. Solicite/valide um certificado no **AWS Certificate Manager (ACM)** para
-   o domínio/subdomínio desejado.
-2. Crie um `aws_apigatewayv2_domain_name` + `aws_apigatewayv2_api_mapping`
-   apontando pro `aws_apigatewayv2_api.webhook` deste `terraform/`.
-3. No seu provedor de DNS, crie um registro `CNAME`/`ALIAS` apontando para
-   o endpoint regional gerado pelo domínio customizado.
-4. Só depois disso, configure a URL final no painel de Webhooks do Mercado
-   Pago com o tópico **Orders (order)**.
-
-**Testando o webhook já implantado, via curl:**
-
-```bash
-curl -i -X POST <webhook_endpoint do terraform output> \
-  -H "Content-Type: application/json" \
-  -d '{"action": "order.updated", "type": "order", "data": {"id": "ORDTST01KWW9Z6D4YVRVAB6VTJWYN33G"}}'
-```
+`terraform/lambda.tf` usa a `LabRole` da AWS Academy diretamente como
+execution role (`role = var.lab_role_arn`), então não tenta criar nenhuma
+IAM role nova. `terraform/eventbridge.tf` cria a regra do EventBridge que
+aciona o polling (rate configurável via `var.poll_schedule_expression`,
+default `rate(10 minutes)`) e a permissão para ela invocar a Lambda.
+`var.order_expiration_minutes` (default `10`, repassada como
+`ORDER_EXPIRATION_MINUTES` na Lambda) define depois de quantos minutos sem
+confirmação uma order pendente é considerada expirada — ver "Decisões de
+design" abaixo.
 
 **Publicando uma mensagem de teste na fila SQS via AWS CLI:**
 
@@ -289,7 +283,15 @@ Não existe uma Order real do Mercado Pago nesse caso (o gateway falhou
 antes de devolver uma), então o registro usa o `external_reference` como
 `order_id` — é a única chave disponível para rastrear a tentativa recusada.
 
-**3) Quando o webhook confirma o pagamento (gatilho webhook) — status
+> O mesmo status `recusado` também é publicado pelo gatilho de polling
+> quando uma order pendente ultrapassa `ORDER_EXPIRATION_MINUTES` sem
+> chegar a `processed` (ver "Expiração de orders pendentes" em "Decisões
+> de design"). Nesse caso `order_id` é o id real da Order no Mercado Pago
+> (ela chegou a ser criada) e `mercado_pago_status` aparece como
+> `"recusado"` — o sentinel interno usado pelo sistema, não um status
+> nativo do Mercado Pago.
+
+**3) Quando o polling confirma o pagamento (gatilho EventBridge) — status
 `pago`, publicado novamente em `sqs-pagamento-efetuado`:**
 
 ```json
@@ -305,19 +307,18 @@ antes de devolver uma), então o registro usa o `external_reference` como
 }
 ```
 
-> **Sobre o critério usado para considerar "pago"**: o webhook do tópico
-> `order` é disparado em qualquer atualização da order (não só quando ela é
-> paga — também pode disparar em expiração, cancelamento etc.). Por isso, o
-> gatilho webhook só publica `status: "pago"` quando a Order consultada em
-> `GET /v1/orders/{id}` retorna `status: "processed"` e
-> `status_detail: "accredited"` (o padrão documentado pelo Mercado Pago para
-> pagamentos concluídos via Orders API). Se, nos seus testes de homologação
-> com Pix, você observar uma combinação diferente de `status`/`status_detail`
-> para "pago", ajuste as constantes `_PAID_STATUS` e `_PAID_STATUS_DETAIL` em
-> `src/application/use_cases/process_order_webhook.py`. Para outras
-> atualizações (order expirada, cancelada etc.) nenhuma mensagem é publicada
-> ainda — é um ponto simples de estender caso você precise desses status
-> também nas filas de saída.
+> **Sobre o critério usado para considerar "pago"**: a cada ciclo de
+> polling, o gatilho EventBridge só publica `status: "pago"` quando a Order
+> consultada em `GET /v1/orders/{id}` retorna `status: "processed"` (o
+> padrão documentado pelo Mercado Pago para pagamentos concluídos via
+> Orders API). Se, nos seus testes de homologação com Pix, você observar um
+> valor diferente de `status` para "pago", ajuste a constante
+> `_PAID_STATUS` em
+> `src/application/use_cases/check_payment_status.py`. Para outras
+> atualizações (order expirada, cancelada etc.) nenhuma mensagem é
+> publicada ainda, e a order continua sendo verificada a cada ciclo — é um
+> ponto simples de estender caso você precise tratar esses status também
+> (ver "Próximos passos sugeridos").
 
 ## Testando contra o LocalStack
 
@@ -405,27 +406,38 @@ domínio de Pagamento.
   diretamente na DLQ (`SQS_PAGAMENTO_SOLICITAR_DLQ_URL`) para investigação
   manual. Se a própria publicação na DLQ falhar, a mensagem é marcada para
   retry (para não perdê-la de vez).
-- **Resposta rápida ao Mercado Pago (webhook)**: a documentação exige resposta
-  em até ~22s. O fluxo atual (`get_order` + `update_item` no DynamoDB) é
-  rápido o bastante na prática, mas se no futuro o processamento pós-webhook
-  ficar mais pesado (ex. disparar e-mails, notificar outros sistemas),
-  considere responder 200 imediatamente após validar a assinatura e mover o
-  processamento pesado para uma fila SQS separada, desacoplando o "avisar
-  recebimento" do "processar".
-- **Validação de assinatura do webhook**: implementada em
-  `webhook_signature.py`, seguindo o algoritmo HMAC-SHA256 documentado pelo
-  Mercado Pago. Só é pulada se `MP_WEBHOOK_SECRET` não estiver configurado —
-  configure-a em produção.
+- **Polling em vez de webhook**: a aplicação não expõe mais nenhum endpoint
+  HTTP público — é ela quem periodicamente pergunta ao Mercado Pago pelo
+  status de cada order pendente (`GET /v1/orders/{id}`), via
+  `polling_handler.py` acionado pelo EventBridge. Isso elimina a
+  necessidade de validar assinatura de requisição (não há mais requisição
+  de entrada de terceiros) e de responder rápido a um caller externo — o
+  único trade-off é a latência entre o pagamento ser processado no Mercado
+  Pago e a próxima execução do polling detectar isso (hoje até
+  `var.poll_schedule_expression`, default `rate(10 minutes)`).
+- **Expiração de orders pendentes**: `CheckPaymentStatusUseCase` compara
+  `Order.created_date` (retornado pelo Mercado Pago na criação) com o
+  instante atual — se passaram mais de `ORDER_EXPIRATION_MINUTES` (default
+  `10`, propositalmente curto para facilitar a homologação/demo deste
+  trabalho — em produção considere um valor mais próximo do
+  `date_of_expiration` real do Pix) sem a order chegar a `processed`, ela é
+  marcada localmente como `PaymentStatus.RECUSADO`, publicada em
+  `sqs-pagamento-recusado` e passa a ser ignorada por
+  `list_pending_orders()` — ou seja, o polling para de verificá-la.
+  Orders sem `created_date` (nenhum caso hoje, já que só orders reais do
+  Mercado Pago entram nesse fluxo) nunca expiram por segurança.
 - **Falha ao publicar nas filas de saída conta como falha do processamento**:
   `SQSPaymentStatusNotifier.notify(...)` é chamado depois de persistir a
   order/atualizar o status — se o `send_message` falhar (ex. erro transitório
-  no SQS), a exceção sobe e a mensagem original (da fila de entrada ou do
-  webhook) é tratada como falha, gerando retry. No gatilho SQS, isso é seguro
+  no SQS), a exceção sobe e a mensagem original (da fila de entrada) ou a
+  execução do polling são tratadas como falha. No gatilho SQS, isso é seguro
   graças à idempotência determinística explicada acima (inclusive no
   caminho de recusa, que persiste/notifica usando o `external_reference`
-  como chave). No gatilho webhook, reprocessar é sempre seguro, pois
-  `get_order` e `update_order_status` são idempotentes por natureza (apenas
-  leem/sobrescrevem o estado mais atual da order).
+  como chave). No polling, reprocessar é sempre seguro, pois `get_order` e
+  `update_order_status` são idempotentes por natureza (apenas leem/
+  sobrescrevem o estado mais atual da order) — uma falha numa order não
+  impede as demais de serem verificadas no mesmo ciclo, e a order que falhou
+  simplesmente é tentada de novo no próximo.
 - **DynamoDB como repositório padrão**: escolhido por ser serverless e sem
   necessidade de gerenciar conexões/VPC a partir da Lambda. Se seu sistema já
   usa outro banco (RDS, etc.), basta criar um novo adapter que implemente
@@ -433,10 +445,10 @@ domínio de Pagamento.
 
 ## Próximos passos sugeridos
 
-- Mover `MP_ACCESS_TOKEN`/`MP_WEBHOOK_SECRET` para o Secrets Manager e
-  buscá-los no cold start da lambda (com cache em variável de módulo).
+- Mover `MP_ACCESS_TOKEN` para o Secrets Manager e buscá-lo no cold start
+  da lambda (com cache em variável de módulo).
 - Adicionar um alarme de CloudWatch na DLQ (`sqs-pagamento-solicitar-dlq`)
   para saber quando mensagens estão sendo definitivamente descartadas.
-- Se o volume justificar, considerar processar o webhook de forma assíncrona
-  (API Gateway → SQS → Lambda) para desacoplar totalmente a resposta HTTP do
-  processamento.
+- Se o volume de orders pendentes crescer muito, trocar o `scan` do
+  `list_pending_orders` por uma query num GSI por `status`, e/ou paralelizar
+  as chamadas ao Mercado Pago dentro do `polling_handler.py`.

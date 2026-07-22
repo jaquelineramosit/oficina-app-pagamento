@@ -1,15 +1,23 @@
 import logging
 import time
-from typing import Optional
+from typing import List, Optional
 
 import boto3
+from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
 from src.application.ports.order_repository_port import OrderRepositoryPort
 from src.domain.entities import Order
+from src.domain.payment_status import MercadoPagoOrderStatus, PaymentStatus
 from src.infrastructure.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Estados terminais: uma vez atingidos, a order já foi paga (status nativo
+# do Mercado Pago) ou foi marcada como recusada/expirada por este próprio
+# sistema (ver CheckPaymentStatusUseCase) — nenhum dos dois precisa mais
+# ser verificado pelo polling.
+_TERMINAL_STATUSES = (MercadoPagoOrderStatus.PROCESSED, PaymentStatus.RECUSADO)
 
 
 class DynamoDBOrderRepository(OrderRepositoryPort):
@@ -52,9 +60,9 @@ class DynamoDBOrderRepository(OrderRepositoryPort):
                 UpdateExpression=(
                     "SET #status = :status, status_detail = :status_detail, "
                     "last_updated_date = :last_updated_date, "
-                    "updated_at_epoch = :updated_at_epoch, raw = :raw"
+                    "updated_at_epoch = :updated_at_epoch, #raw = :raw"
                 ),
-                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeNames={"#status": "status", "#raw": "raw"},
                 ExpressionAttributeValues={
                     ":status": order.status,
                     ":status_detail": order.status_detail,
@@ -75,3 +83,18 @@ class DynamoDBOrderRepository(OrderRepositoryPort):
         if not item:
             return None
         return Order.from_dict(item.get("raw", {}))
+
+    def list_pending_orders(self) -> List[Order]:
+        orders: List[Order] = []
+        scan_kwargs = {"FilterExpression": ~Attr("status").is_in(list(_TERMINAL_STATUSES))}
+
+        while True:
+            response = self._table.scan(**scan_kwargs)
+            orders.extend(Order.from_dict(item.get("raw", {})) for item in response.get("Items", []))
+
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            scan_kwargs["ExclusiveStartKey"] = last_key
+
+        return orders

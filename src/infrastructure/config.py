@@ -18,10 +18,6 @@ class Settings:
         return os.environ.get("MP_ACCESS_TOKEN", "")
 
     @property
-    def MP_WEBHOOK_SECRET(self) -> str:
-        return os.environ.get("MP_WEBHOOK_SECRET", "")
-
-    @property
     def MP_API_BASE_URL(self) -> str:
         return os.environ.get("MP_API_BASE_URL", "https://api.mercadopago.com")
 
@@ -44,6 +40,10 @@ class Settings:
     @property
     def HTTP_TIMEOUT_SECONDS(self) -> float:
         return float(os.environ.get("MP_HTTP_TIMEOUT_SECONDS", "10"))
+
+    @property
+    def ORDER_EXPIRATION_MINUTES(self) -> int:
+        return int(os.environ.get("ORDER_EXPIRATION_MINUTES", "10"))
 
     @property
     def AWS_REGION(self) -> str:
