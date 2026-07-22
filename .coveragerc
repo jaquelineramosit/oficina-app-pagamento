@@ -1,0 +1,10 @@
+[run]
+source = src
+branch = true
+
+[report]
+show_missing = true
+skip_covered = false
+
+[xml]
+output = coverage.xml

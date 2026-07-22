@@ -17,7 +17,7 @@ concurrency:
 jobs:
 
   test:
-    name: Testes unitários
+    name: Testes automatizados (unit + BDD) e cobertura
     runs-on: ubuntu-latest
 
     steps:
@@ -30,8 +30,104 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements-dev.txt
 
-      - name: Rodar testes
-        run: pytest -v
+      - name: Rodar testes com cobertura
+        run: pytest -v --cov=src --cov-report=xml --cov-report=term-missing --cov-fail-under=80
+
+      - name: Publicar relatório de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  quality-gate:
+    name: Qualidade de código (SonarQube)
+    runs-on: ubuntu-latest
+    needs: test
+
+    env:
+      SONAR_ADMIN_PASSWORD: "CiTemp0rary!Passw0rd"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Baixar relatório de cobertura
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+
+      # O Elasticsearch embutido no SonarQube exige esse limite de mmap no
+      # host — sem isso, o container sobe e morre (ou nunca fica "UP").
+      - name: Ajustar vm.max_map_count (requisito do Elasticsearch embutido)
+        run: sudo sysctl -w vm.max_map_count=262144
+
+      - name: Subir SonarQube Community Edition (efêmero, só para este job)
+        run: docker run -d --name sonarqube --network host sonarqube:community
+
+      - name: Aguardar SonarQube ficar pronto
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            status="$(curl -s http://localhost:9000/api/system/status | jq -r '.status' 2>/dev/null || true)"
+            if [ "$status" = "UP" ]; then
+              echo "SonarQube pronto."
+              exit 0
+            fi
+            echo "Aguardando SonarQube... tentativa ${i} (status atual: ${status:-desconhecido})"
+            sleep 5
+          done
+          echo "SonarQube não ficou pronto a tempo."
+          docker logs sonarqube || true
+          exit 1
+
+      - name: Trocar senha padrão do admin
+        run: |
+          curl -sf -u admin:admin -X POST "http://localhost:9000/api/users/change_password" \
+            --data-urlencode "login=admin" \
+            --data-urlencode "previousPassword=admin" \
+            --data-urlencode "password=${SONAR_ADMIN_PASSWORD}"
+
+      - name: Criar projeto e gerar token de análise
+        run: |
+          curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST "http://localhost:9000/api/projects/create" \
+            --data-urlencode "project=oficina-app-pagamento" \
+            --data-urlencode "name=oficina-app-pagamento"
+
+          token="$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST "http://localhost:9000/api/user_tokens/generate" \
+            --data-urlencode "name=ci-${{ github.run_id }}" | jq -r '.token')"
+
+          echo "SONAR_TOKEN=${token}" >> "$GITHUB_ENV"
+
+      - name: Rodar análise do SonarScanner
+        run: |
+          docker run --rm --network host \
+            -e SONAR_HOST_URL=http://localhost:9000 \
+            -e SONAR_TOKEN="${{ env.SONAR_TOKEN }}" \
+            -v "${{ github.workspace }}:/usr/src" \
+            sonarsource/sonar-scanner-cli
+
+      - name: Verificar Quality Gate
+        run: |
+          set -e
+          gate_status=""
+          for i in $(seq 1 30); do
+            gate_status="$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" \
+              "http://localhost:9000/api/qualitygates/project_status?projectKey=oficina-app-pagamento" \
+              | jq -r '.projectStatus.status')"
+
+            if [ "$gate_status" != "NONE" ] && [ -n "$gate_status" ]; then
+              break
+            fi
+
+            echo "Aguardando processamento da análise... tentativa ${i}"
+            sleep 5
+          done
+
+          echo "Quality Gate: ${gate_status}"
+          [ "$gate_status" = "OK" ]
+
+      - name: Encerrar SonarQube
+        if: always()
+        run: docker rm -f sonarqube || true
 
   validate-terraform:
     name: Validar Terraform
