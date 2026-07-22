@@ -191,6 +191,15 @@ push pra `main` e é quem de fato provisiona/atualiza os recursos na AWS.
      code smells e duplicação. Não precisa de nenhum secret novo — a
      senha de admin usada é local ao container, que é destruído no final
      do job.
+
+     > **Ainda não é required status check.** Como o SonarQube sobe do
+     > zero a cada execução (com Elasticsearch embutido), esse job é mais
+     > sujeito a timing/flakiness do que `test`/`validate-terraform`. Por
+     > enquanto ele fica **informativo** — aparece no PR mas não bloqueia
+     > merge. A recomendação é observar algumas execuções reais e só
+     > então promovê-lo a required status check em Settings → Branches
+     > (mesmo lugar onde `Testes unitários` e `Validar Terraform` já
+     > estão configurados).
   3. **`validate-terraform`** — empacota a Lambda e roda
      `terraform fmt -check` + `terraform init -backend=false` +
      `terraform validate` dentro de `terraform/`. Não precisa de

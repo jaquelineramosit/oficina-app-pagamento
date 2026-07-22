@@ -38,6 +38,7 @@ def _to_decimal(value, field_name: str) -> Decimal:
 @dataclass(frozen=True)
 class Payer:
     email: str
+    first_name: Optional[str] = None
 
     def __post_init__(self):
         if not self.email or "@" not in self.email:
@@ -96,7 +97,10 @@ class OrderRequest:
     """
     Payload de entrada já validado, pronto para ser enviado à API de Orders
     do Mercado Pago. Todos os campos são obrigatórios, exceto "type" e
-    "processing_mode" — quando omitidos, assumem "online"/"automatic".
+    "processing_mode" — quando omitidos, assumem "online"/"automatic" — e
+    "payer.first_name", que é opcional (só é incluído no payload enviado ao
+    Mercado Pago quando informado; útil para simular status de teste no
+    sandbox, ex.: "APRO").
     """
     type: str
     processing_mode: str
@@ -148,19 +152,23 @@ class OrderRequest:
             external_reference=data["external_reference"],
             total_amount=_to_decimal(data["total_amount"], "total_amount"),
             description=data["description"],
-            payer=Payer(email=payer_raw["email"]),
+            payer=Payer(email=payer_raw["email"], first_name=payer_raw.get("first_name")),
             payments=payments,
         )
 
     def to_mercado_pago_payload(self) -> dict:
         """Serializa de volta para o formato exato aceito por POST /v1/orders."""
+        payer_payload = {"email": self.payer.email}
+        if self.payer.first_name:
+            payer_payload["first_name"] = self.payer.first_name
+
         return {
             "type": self.type,
             "processing_mode": self.processing_mode,
             "external_reference": self.external_reference,
             "total_amount": str(self.total_amount),
             "description": self.description,
-            "payer": {"email": self.payer.email},
+            "payer": payer_payload,
             "transactions": {
                 "payments": [
                     {
