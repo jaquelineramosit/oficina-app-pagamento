@@ -5,6 +5,8 @@ resource "aws_cloudwatch_event_rule" "poll_payment_status" {
   description = "Aciona periodicamente a lambda oficina-pagamento para consultar (GET) o status das orders Pix pendentes na Orders API do Mercado Pago."
 
   schedule_expression = var.poll_schedule_expression
+
+  state = var.poll_enabled ? "ENABLED" : "DISABLED"
 }
 
 resource "aws_cloudwatch_event_target" "poll_payment_status" {

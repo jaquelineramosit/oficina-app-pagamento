@@ -186,6 +186,7 @@ repositório):
 | `ORDERS_TABLE_NAME` | idem, `dynamodb_table_name` |
 | `ENVIRONMENT` | Opcional (default `dev`) — usada na chave do state Terraform (`oficina-app-pagamento/${ENVIRONMENT}/pagamento/terraform.tfstate`) |
 | `PROJECT_NAME` | Opcional (default `oficina`) — repassada como `TF_VAR_project_name` |
+| `POLL_ENABLED` | Opcional (default `true`) — feature flag do polling, repassada como `TF_VAR_poll_enabled`. Veja "Ligando/desligando o polling manualmente" abaixo |
 
 ## Build e deploy (Terraform)
 
@@ -222,6 +223,34 @@ default `rate(10 minutes)`) e a permissão para ela invocar a Lambda.
 `ORDER_EXPIRATION_MINUTES` na Lambda) define depois de quantos minutos sem
 confirmação uma order pendente é considerada expirada — ver "Decisões de
 design" abaixo.
+
+### Ligando/desligando o polling manualmente
+
+`var.poll_enabled` (default `true`) é uma feature flag que controla o
+`state` (`ENABLED`/`DISABLED`) da regra `aws_cloudwatch_event_rule.poll_payment_status`
+em `terraform/eventbridge.tf`. Com ela em `false`, a regra fica
+`DISABLED` e a lambda simplesmente para de ser invocada pelo schedule —
+zero execuções, sem precisar mudar nenhum código. O gatilho SQS
+(`sqs-pagamento-solicitar`) não é afetado, continua funcionando normalmente.
+
+Formas de alternar:
+
+- **Via GitHub Actions** (recomendado para manter o Terraform state
+  consistente): configure a variable `POLL_ENABLED` como `false` em
+  Settings → Secrets and variables → Actions → Variables e rode o workflow
+  `terraform-apply-pagamento.yml` (push ou `workflow_dispatch`).
+- **Via Terraform local**: `terraform apply -var="poll_enabled=false"`
+  (mantendo as demais `-var` do comando de deploy).
+- **Via AWS CLI, para um desligamento imediato sem esperar um deploy**:
+  ```bash
+  aws events disable-rule --name oficina-pagamento-poll-status
+  # para religar:
+  aws events enable-rule --name oficina-pagamento-poll-status
+  ```
+  Como o `state` da regra é gerenciado pelo Terraform, um toggle feito
+  assim aparece como *drift* no próximo `terraform plan`/`apply` — ele só
+  se torna permanente se você também atualizar `poll_enabled` na mesma
+  direção antes do próximo apply.
 
 **Publicando uma mensagem de teste na fila SQS via AWS CLI:**
 
