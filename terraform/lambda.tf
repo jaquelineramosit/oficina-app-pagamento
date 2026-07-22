@@ -19,7 +19,8 @@ resource "aws_lambda_function" "pagamento" {
       MP_ACCESS_TOKEN = var.mp_access_token
       MP_API_BASE_URL = var.mp_api_base_url
 
-      ORDERS_TABLE_NAME = var.orders_table_name
+      ORDERS_TABLE_NAME        = var.orders_table_name
+      ORDER_EXPIRATION_MINUTES = var.order_expiration_minutes
 
       SQS_PAGAMENTO_EFETUADO_QUEUE_URL = var.efetuado_queue_url
       SQS_PAGAMENTO_RECUSADO_QUEUE_URL = var.recusado_queue_url

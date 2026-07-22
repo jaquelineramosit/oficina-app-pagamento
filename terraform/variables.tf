@@ -35,7 +35,13 @@ variable "mp_access_token" {
 variable "poll_schedule_expression" {
   description = "Expressao de agendamento (rate/cron) do EventBridge que aciona o polling de status das orders pendentes na Orders API do Mercado Pago."
   type        = string
-  default     = "rate(1 minute)"
+  default     = "rate(10 minutes)"
+}
+
+variable "order_expiration_minutes" {
+  description = "Minutos apos a criacao da order sem confirmacao de pagamento ate ela ser marcada como recusada/expirada e parar de ser verificada pelo polling."
+  type        = number
+  default     = 10
 }
 
 variable "solicitar_queue_arn" {

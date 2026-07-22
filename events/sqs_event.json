@@ -3,7 +3,7 @@
     {
       "messageId": "11d6ee51-4cc7-4302-9e22-7cd8afdaadf5",
       "receiptHandle": "AQEBexampleReceiptHandle==",
-      "body": "{\"type\": \"online\", \"processing_mode\": \"automatic\", \"external_reference\": \"order_test_001\", \"total_amount\": \"10.00\", \"description\": \"Order Pix - teste\", \"payer\": {\"email\": \"test@testuser.com\"}, \"transactions\": {\"payments\": [{\"amount\": \"10.00\", \"payment_method\": {\"type\": \"bank_transfer\", \"id\": \"pix\"}}]}}",
+      "body": "{\"external_reference\":\"12345678\",\"total_amount\":\"10.00\",\"description\":\"Order Pix - teste\",\"payer\":{\"email\":\"test@testuser.com\"},\"transactions\":{\"payments\":[{\"amount\":\"10.00\",\"payment_method\":{\"type\":\"bank_transfer\",\"id\":\"pix\"}}]}}",
       "attributes": {
         "ApproximateReceiveCount": "1",
         "SentTimestamp": "1700000000000",

@@ -14,3 +14,12 @@ class PaymentStatus:
     EFETUADO = "efetuado"
     RECUSADO = "recusado"
     PAGO = "pago"
+
+
+class MercadoPagoOrderStatus:
+    """
+    Valores nativos de Order.status retornados pela Orders API do Mercado
+    Pago (bem diferentes dos valores de PaymentStatus acima). Usado pelo
+    polling para decidir se uma order já chegou a um estado terminal.
+    """
+    PROCESSED = "processed"
