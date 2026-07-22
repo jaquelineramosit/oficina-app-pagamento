@@ -130,10 +130,16 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
+Isso roda tanto os testes unitários (`tests/unit/`) quanto o cenário BDD
+(`tests/bdd/`) — o pytest descobre os dois automaticamente via
+`pytest-bdd`, não precisa de comando separado.
+
 Os testes cobrem:
 - Validação de todos os campos obrigatórios do payload (`test_entities.py`)
 - O caso de uso de criação de order, com o gateway/repositório mockados
   (`test_create_payment_order.py`)
+- O adapter HTTP que fala com o Mercado Pago (`create_order`/`get_order`,
+  sucesso/erro de rede/status inesperado) — `test_mercado_pago_gateway.py`
 - O caso de uso de verificação de status via polling, incluindo a
   expiração de orders pendentes (`test_check_payment_status.py`)
 - O filtro de orders pendentes do `DynamoDBOrderRepository`, contra uma
@@ -142,14 +148,65 @@ Os testes cobrem:
   mockadas (`test_sqs_handler.py`, `test_polling_handler.py`)
 - O dispatcher que decide qual dos dois handlers chamar
   (`test_payment_handler.py`)
+- **BDD (`tests/bdd/`)**: o fluxo completo de criação de pagamento via
+  fila SQS, escrito em Gherkin em português
+  (`tests/bdd/features/criacao_pagamento.feature`, implementado com
+  `pytest-bdd` em `tests/bdd/step_defs/test_criacao_pagamento.py`) —
+  cobre tanto o caminho de sucesso (Order criada → publicada como
+  `efetuado`) quanto a recusa do gateway (→ publicada como `recusado`).
+
+### Cobertura de testes
+
+```bash
+pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+```
+
+A configuração de cobertura fica em `.coveragerc` (`source = src` — só a
+aplicação em si entra na conta, não os próprios testes nem
+`resources_local/`). O CI (`ci.yml`) roda exatamente esse comando e
+**falha o build se a cobertura total cair abaixo de 80%**
+(`--cov-fail-under=80`), além de publicar `coverage.xml` como artefato
+para o job de qualidade (SonarQube) usar — veja a seção seguinte.
 
 ## CI/CD (GitHub Actions)
 
+`ci.yml` e `terraform-apply-pagamento.yml` são dois workflows
+independentes: o primeiro cobre build + testes + qualidade em todo
+push/PR (nunca toca em infraestrutura real), o segundo só dispara no
+push pra `main` e é quem de fato provisiona/atualiza os recursos na AWS.
+
 - **`.github/workflows/ci.yml`** — roda em todo push (exceto direto em
-  `main`) e em PRs para `main`: `pytest -v` e, num job separado,
-  `terraform fmt -check` + `terraform init -backend=false` +
-  `terraform validate` dentro de `terraform/`. Não precisa de credenciais
-  AWS.
+  `main`) e em PRs para `main`, em três jobs independentes:
+  1. **`test`** — instala `requirements-dev.txt` e roda
+     `pytest -v --cov=src --cov-fail-under=80` (unit + BDD juntos, ver
+     "Rodando os testes" acima), publicando `coverage.xml` como artefato.
+  2. **`quality-gate`** — depende do job `test`. Sobe um **SonarQube
+     Community Edition efêmero via Docker** (só para a duração deste
+     job, sem depender de nenhuma conta/serviço externo), roda o
+     `sonar-scanner` (config em `sonar-project.properties`, usando o
+     `coverage.xml` do job anterior) e falha o build se o **Quality
+     Gate** não vier `OK` — o gate padrão do SonarQube ("Sonar way") já
+     cobre cobertura ≥ 80% em código novo (que, numa análise sempre "do
+     zero" como essa, é o código inteiro), além de bugs, vulnerabilidades,
+     code smells e duplicação. Não precisa de nenhum secret novo — a
+     senha de admin usada é local ao container, que é destruído no final
+     do job.
+
+     > **Ainda não é required status check.** Como o SonarQube sobe do
+     > zero a cada execução (com Elasticsearch embutido), esse job é mais
+     > sujeito a timing/flakiness do que `test`/`validate-terraform`. Por
+     > enquanto ele fica **informativo** — aparece no PR mas não bloqueia
+     > merge. A recomendação é observar algumas execuções reais e só
+     > então promovê-lo a required status check em Settings → Branches
+     > (mesmo lugar onde `Testes unitários` e `Validar Terraform` já
+     > estão configurados).
+  3. **`validate-terraform`** — empacota a Lambda e roda
+     `terraform fmt -check` + `terraform init -backend=false` +
+     `terraform validate` dentro de `terraform/`. Não precisa de
+     credenciais AWS.
+
+  Nenhum desses três jobs precisa de credenciais AWS nem toca em infra
+  real — só o workflow abaixo faz isso.
 - **`.github/workflows/terraform-apply-pagamento.yml`** — dispara no push
   pra `main` (ou seja, no merge do PR): empacota a Lambda (`Build Lambda
   package`) e roda `terraform init`/`plan`/`apply` de verdade, criando/
@@ -406,6 +463,16 @@ domínio de Pagamento.
 
 ## Decisões de design e pontos de atenção
 
+- **Serverless por decisão, não por omissão — sem Kubernetes**: este
+  serviço roda inteiramente como Lambda (SQS + EventBridge como gatilhos),
+  provisionada via Terraform. Não há Dockerfile de aplicação nem manifests
+  de Kubernetes neste repositório, e essa é uma escolha arquitetural
+  deliberada para uma carga de trabalho orientada a filas/polling, não uma
+  lacuna. Se o requisito de "deploy automatizado em ambiente Kubernetes"
+  do seu trabalho se aplica a este serviço especificamente (e não a outro
+  componente do sistema mais amplo), isso exigiria uma reescrita real —
+  containerizar um consumer de longa duração para a fila `sqs-pagamento-
+  solicitar` e um `CronJob` para o polling — que ainda não foi feita aqui.
 - **Idempotência determinística por `external_reference`**: a
   `X-Idempotency-Key` enviada ao Mercado Pago é derivada do
   `external_reference` do pedido (`uuid5`), e não é mais um UUID aleatório.

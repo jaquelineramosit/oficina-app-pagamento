@@ -91,3 +91,25 @@ def test_to_mercado_pago_payload_matches_expected_shape():
     assert mp_payload["total_amount"] == "10.00"
     assert mp_payload["transactions"]["payments"][0]["payment_method"]["id"] == "pix"
     assert mp_payload["payer"]["email"] == "test@testuser.com"
+
+
+def test_payer_first_name_is_optional_and_absent_from_payload_when_not_informed():
+    order_request = OrderRequest.from_dict(VALID_PAYLOAD)
+
+    assert order_request.payer.first_name is None
+    mp_payload = order_request.to_mercado_pago_payload()
+    assert "first_name" not in mp_payload["payer"]
+
+
+def test_payer_first_name_is_captured_and_sent_to_mercado_pago():
+    payload = {
+        **VALID_PAYLOAD,
+        "payer": {"email": "test_user_br@testuser.com", "first_name": "APRO"},
+    }
+
+    order_request = OrderRequest.from_dict(payload)
+
+    assert order_request.payer.first_name == "APRO"
+    mp_payload = order_request.to_mercado_pago_payload()
+    assert mp_payload["payer"]["first_name"] == "APRO"
+    assert mp_payload["payer"]["email"] == "test_user_br@testuser.com"
