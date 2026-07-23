@@ -17,9 +17,9 @@ class PaymentGatewayPort(ABC):
     @abstractmethod
     def create_order(self, order_request: OrderRequest, idempotency_key: str) -> Order:
         """Cria uma Order no gateway (POST /v1/orders)."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def get_order(self, order_id: str) -> Order:
         """Consulta uma Order existente no gateway (GET /v1/orders/{id})."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover

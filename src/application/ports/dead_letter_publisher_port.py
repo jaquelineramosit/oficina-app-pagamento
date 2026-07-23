@@ -12,4 +12,4 @@ class DeadLetterPublisherPort(ABC):
     @abstractmethod
     def publish(self, message_id: str, raw_body: str, error: str) -> None:
         """Publica a mensagem rejeitada, com o motivo do erro, na DLQ."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover

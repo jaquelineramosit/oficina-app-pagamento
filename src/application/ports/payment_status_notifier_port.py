@@ -13,4 +13,4 @@ class PaymentStatusNotifierPort(ABC):
     @abstractmethod
     def notify(self, order: Order, status: str) -> None:
         """Publica uma mensagem informando o novo status (ex.: 'efetuado', 'recusado', 'pago')."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
