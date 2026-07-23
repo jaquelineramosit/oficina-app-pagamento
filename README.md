@@ -168,6 +168,16 @@ aplicação em si entra na conta, não os próprios testes nem
 (`--cov-fail-under=80`), além de publicar `coverage.xml` como artefato
 para o job de qualidade (SonarQube) usar — veja a seção seguinte.
 
+**Onde ver a cobertura no GitHub Actions:** abra o workflow run → job
+`test` → o **Job Summary** (resumo que aparece no topo da página do run,
+sem precisar abrir nenhum log) mostra a tabela de cobertura por arquivo +
+o total, gerada pela action `irongut/CodeCoverageSummary`. O `coverage.xml`
+bruto também fica disponível como artefato do job (`coverage-report`), se
+precisar do dado cru. Isso é a única visão de cobertura persistente hoje:
+o job `quality-gate` (SonarQube) só existe durante a execução — não há
+dashboard do Sonar pra consultar depois, apenas o resultado do Quality
+Gate (✅/❌) naquele run.
+
 ## CI/CD (GitHub Actions)
 
 `ci.yml` e `terraform-apply-pagamento.yml` são dois workflows
