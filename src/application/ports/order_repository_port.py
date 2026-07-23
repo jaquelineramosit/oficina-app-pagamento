@@ -14,20 +14,20 @@ class OrderRepositoryPort(ABC):
     @abstractmethod
     def save_created_order(self, order: Order) -> None:
         """Persiste uma order recém-criada."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def update_order_status(self, order: Order) -> None:
         """Atualiza o status de uma order já existente (chamado pelo polling)."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def find_by_id(self, order_id: str) -> Optional[Order]:
         """Busca uma order pelo id, caso já esteja persistida."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     def list_pending_orders(self) -> List[Order]:
         """Lista as orders com status 'efetuado' (aguardando confirmação de
         pagamento), candidatas a serem verificadas pelo polling."""
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover

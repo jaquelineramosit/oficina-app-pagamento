@@ -1,5 +1,8 @@
+from unittest.mock import MagicMock
+
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from src.domain.entities import Order
@@ -45,3 +48,57 @@ def test_list_pending_orders_stops_returning_order_once_it_becomes_terminal(dyna
 
     repository.update_order_status(_order("ORD1", "processed"))
     assert repository.list_pending_orders() == []
+
+
+def test_find_by_id_returns_none_when_item_does_not_exist(dynamodb_resource):
+    repository = DynamoDBOrderRepository(table_name=TABLE_NAME, resource=dynamodb_resource)
+
+    assert repository.find_by_id("NAO_EXISTE") is None
+
+
+def test_find_by_id_returns_order_reconstructed_from_raw(dynamodb_resource):
+    repository = DynamoDBOrderRepository(table_name=TABLE_NAME, resource=dynamodb_resource)
+    repository.save_created_order(_order("ORD1", "action_required"))
+
+    order = repository.find_by_id("ORD1")
+
+    assert order is not None
+    assert order.id == "ORD1"
+    assert order.status == "action_required"
+
+
+def test_save_created_order_logs_and_reraises_on_client_error(dynamodb_resource):
+    repository = DynamoDBOrderRepository(table_name="tabela-inexistente", resource=dynamodb_resource)
+
+    with pytest.raises(ClientError):
+        repository.save_created_order(_order("ORD1", "action_required"))
+
+
+def test_update_order_status_logs_and_reraises_on_client_error(dynamodb_resource):
+    repository = DynamoDBOrderRepository(table_name="tabela-inexistente", resource=dynamodb_resource)
+
+    with pytest.raises(ClientError):
+        repository.update_order_status(_order("ORD1", "processed"))
+
+
+def test_list_pending_orders_follows_pagination_across_multiple_pages():
+    mock_table = MagicMock()
+    mock_table.scan.side_effect = [
+        {
+            "Items": [{"raw": {"id": "ORD1", "status": "action_required"}}],
+            "LastEvaluatedKey": {"order_id": "ORD1"},
+        },
+        {
+            "Items": [{"raw": {"id": "ORD2", "status": "action_required"}}],
+        },
+    ]
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+
+    repository = DynamoDBOrderRepository(table_name=TABLE_NAME, resource=mock_resource)
+
+    orders = repository.list_pending_orders()
+
+    assert {order.id for order in orders} == {"ORD1", "ORD2"}
+    assert mock_table.scan.call_count == 2
+    assert mock_table.scan.call_args_list[1].kwargs["ExclusiveStartKey"] == {"order_id": "ORD1"}
